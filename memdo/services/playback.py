@@ -36,5 +36,15 @@ class PlaybackEngine:
         regions = self._dao.regions_at(self.recording_id, ts_us)
         return state, regions
 
+    def heads(self, ts_us: int) -> dict[int, bytes]:
+        """Captured region head bytes for the sample at or before ts_us.
+
+        Kept separate from :meth:`seek` so its tuple contract is unchanged;
+        feeds the content heuristics that colour the region view.
+        """
+        if self.recording_id is None:
+            return {}
+        return self._dao.heads_at(self.recording_id, ts_us)
+
     def close(self) -> None:
         self._conn.close()

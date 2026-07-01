@@ -71,4 +71,61 @@ QPushButton#Export {{
     font-weight: 600;
 }}
 QPushButton#Export:hover {{ background: #55f0ff; }}
+QPushButton#Select {{
+    background: transparent;
+    color: {ACCENT_2};
+    border: 1px solid {ACCENT_2};
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-weight: 600;
+}}
+QPushButton#Select:checked {{ background: {ACCENT_2}; color: #2a0a1e; }}
+QLabel#Selection {{ color: {ACCENT_2}; font-size: 11px; }}
+"""
+
+
+# Applied app-wide so the whole shell — tabs, toolbar, tables, status bar —
+# reads as one vivid surface, not just the dashboard tab.
+APP_QSS = f"""
+QMainWindow, QDialog {{ background: {BG}; }}
+QLabel {{ color: {TEXT}; }}
+QStatusBar {{ background: {PANEL}; color: {MUTED}; }}
+QStatusBar QLabel {{ color: {MUTED}; }}
+QToolBar {{ background: {PANEL}; border: none; spacing: 6px; padding: 4px; }}
+QToolButton {{
+    background: {GRID}; color: {TEXT};
+    border: 1px solid {GRID}; border-radius: 6px; padding: 5px 12px;
+}}
+QToolButton:hover {{ border: 1px solid {ACCENT}; color: {ACCENT}; }}
+QToolButton:disabled {{ color: {MUTED}; }}
+QTabWidget::pane {{ border: 1px solid {GRID}; background: {BG}; }}
+QTabBar::tab {{
+    background: {PANEL}; color: {MUTED};
+    padding: 8px 18px; margin-right: 2px;
+    border-top-left-radius: 8px; border-top-right-radius: 8px;
+}}
+QTabBar::tab:selected {{
+    background: {BG}; color: {ACCENT}; border-bottom: 2px solid {ACCENT};
+}}
+QTableView {{
+    background: {PANEL}; alternate-background-color: #101722;
+    color: {TEXT}; gridline-color: {GRID};
+    selection-background-color: {ACCENT}; selection-color: #06222a;
+    border: 1px solid {GRID};
+}}
+QHeaderView::section {{
+    background: {GRID}; color: {TEXT}; border: none; padding: 5px;
+}}
+QLineEdit {{
+    background: {PANEL}; color: {TEXT};
+    border: 1px solid {GRID}; border-radius: 6px; padding: 5px 8px;
+    selection-background-color: {ACCENT}; selection-color: #06222a;
+}}
+QMenu {{ background: {PANEL}; color: {TEXT}; border: 1px solid {GRID}; }}
+QMenu::item:selected {{ background: {ACCENT}; color: #06222a; }}
+QScrollBar:vertical {{ background: {BG}; width: 12px; margin: 0; }}
+QScrollBar::handle:vertical {{
+    background: {GRID}; border-radius: 6px; min-height: 24px;
+}}
+QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
 """

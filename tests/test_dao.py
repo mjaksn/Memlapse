@@ -89,3 +89,32 @@ def test_add_sample_with_no_regions(dao):
     dao.add_sample(rid, 1_000, _state(1_000), [])
     assert dao.sample_times(rid) == [1_000]
     assert dao.regions_at(rid, 1_000) == []
+
+
+# --- region head blobs -----------------------------------------------------
+def test_add_sample_stores_heads_for_matching_regions(dao, sample_regions):
+    rid = dao.create_recording(1000, "p", 0)
+    # Head provided for the first region only; the second gets no blob.
+    heads = {sample_regions[0].base_addr: b"MZ\x90\x90"}
+    dao.add_sample(rid, 1_000, _state(1_000), sample_regions, heads)
+    assert dao.heads_at(rid, 1_000) == {sample_regions[0].base_addr: b"MZ\x90\x90"}
+
+
+def test_heads_at_empty_when_no_heads_recorded(dao, sample_regions):
+    rid = dao.create_recording(1000, "p", 0)
+    dao.add_sample(rid, 1_000, _state(1_000), sample_regions)  # no heads arg
+    assert dao.heads_at(rid, 1_000) == {}
+
+
+def test_heads_at_before_first_sample_is_empty(dao, sample_regions):
+    rid = dao.create_recording(1000, "p", 0)
+    dao.add_sample(rid, 5_000, _state(5_000), sample_regions, {0x10000: b"x"})
+    assert dao.heads_at(rid, 1_000) == {}
+
+
+def test_heads_at_uses_latest_sample_before(dao, sample_regions):
+    rid = dao.create_recording(1000, "p", 0)
+    dao.add_sample(rid, 1_000, _state(1_000), sample_regions, {0x10000: b"old"})
+    dao.add_sample(rid, 2_000, _state(2_000), sample_regions, {0x10000: b"new"})
+    assert dao.heads_at(rid, 1_500) == {0x10000: b"old"}
+    assert dao.heads_at(rid, 9_999) == {0x10000: b"new"}

@@ -79,3 +79,49 @@ def test_sleep_remaining_runs_and_exits(qapp):
     start = time.monotonic()
     s._sleep_remaining(start)  # loops at least once, then exits when time is up
     assert time.monotonic() - start >= 0.01
+
+
+# --- _read_heads -----------------------------------------------------------
+from memdo.model.region import (  # noqa: E402
+    MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_READWRITE, Region,
+)
+
+
+class _FakePM:
+    """Minimal ProcessMemory stand-in for _read_heads."""
+
+    def __init__(self, can_read, data=b"\x90\x90"):
+        self.can_read = can_read
+        self._data = data
+        self.reads: list[tuple[int, int]] = []
+
+    def read(self, addr, size):
+        self.reads.append((addr, size))
+        return self._data
+
+
+def _exec(base):
+    return Region(base, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, 0x20000)
+
+
+def test_read_heads_empty_when_no_read_access():
+    pm = _FakePM(can_read=False)
+    assert RegionSampler._read_heads(pm, [_exec(0x1000)]) == {}
+    assert pm.reads == []  # never attempted a read
+
+
+def test_read_heads_captures_executable_readable_regions():
+    pm = _FakePM(can_read=True, data=b"MZ\x90")
+    regions = [
+        _exec(0x1000),                                          # exec + readable
+        Region(0x2000, 4096, MEM_COMMIT, PAGE_READWRITE, 0x20000),  # not exec
+        Region(0x3000, 4096, MEM_RESERVE, PAGE_EXECUTE_READ, 0x20000),  # not readable
+    ]
+    heads = RegionSampler._read_heads(pm, regions)
+    assert heads == {0x1000: b"MZ\x90"}
+    assert pm.reads == [(0x1000, 256)]  # only the qualifying region was read
+
+
+def test_read_heads_skips_regions_that_read_empty():
+    pm = _FakePM(can_read=True, data=b"")
+    assert RegionSampler._read_heads(pm, [_exec(0x1000)]) == {}

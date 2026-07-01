@@ -12,6 +12,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from .ui import MainWindow
+from .ui.theme import APP_QSS
 from .win32 import privileges
 
 
@@ -31,6 +32,7 @@ def main(argv: list[str] | None = None) -> int:
 
     app = QApplication(argv)
     app.setApplicationName("MemDo")
+    app.setStyleSheet(APP_QSS)
 
     window = MainWindow()
     window.show()

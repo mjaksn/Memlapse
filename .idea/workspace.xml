@@ -1,8 +1,30 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="c41fce82-5249-4457-8558-b137dd811e01" name="Changes" comment="Add tests abd nore graphics">
-      <change beforePath="$PROJECT_DIR$/memdo/collectors/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/collectors/__init__.py" afterDir="false" />
+    <list default="true" id="c41fce82-5249-4457-8558-b137dd811e01" name="Changes" comment="linting">
+      <change afterPath="$PROJECT_DIR$/RefDocs/A_Review_on_Fileless_Malware_Analysis_Techniques.pdf" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/RefDocs/Deep Dive into Stealthy Process Injection Techniques_ Exploiting RWX Memory Regions - Trovent Security GmbH.html" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/RefDocs/ESWA_119133.pdf" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/RefDocs/Fileless Malware Detection_ Hunt In-Memory Attacks.html" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/RefDocs/ssrn-4932008.pdf" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/RefDocs/vmware-security-services-platform-51.pdf" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/ARCHITECTURE.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/ARCHITECTURE.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/memdo/analytics.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/analytics.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/memdo/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/app.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/memdo/collectors/region.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/collectors/region.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/memdo/services/playback.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/services/playback.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/memdo/storage/dao.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/storage/dao.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/memdo/ui/dashboard.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/ui/dashboard.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/memdo/ui/gauges.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/ui/gauges.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/memdo/ui/main_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/ui/main_window.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/memdo/ui/process_view.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/ui/process_view.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/memdo/ui/region_view.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/ui/region_view.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/memdo/ui/theme.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/ui/theme.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_analytics.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_analytics.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_dao.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_dao.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_playback.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_playback.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_region_sampler.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_region_sampler.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_region_view.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_region_view.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -32,11 +54,20 @@
     "codeWithMe.voiceChat.enabledByDefault": "false",
     "git-widget-placeholder": "feature/test-coverage",
     "ignore.virus.scanning.warn.message": "true",
+    "last_opened_file_path": "C:/Users/mattjack/PycharmProjects/MemDo",
     "nodejs_package_manager_path": "npm",
     "settings.editor.selected.configurable": "preferences.pluginManager",
     "vue.rearranger.settings.migration": "true"
   }
 }]]></component>
+  <component name="RecentsManager">
+    <key name="CopyFile.RECENT_KEYS">
+      <recent name="C:\Users\mattjack\PycharmProjects\MemDo" />
+    </key>
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\mattjack\PycharmProjects\MemDo\RefDocs" />
+    </key>
+  </component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -51,7 +82,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1782879428830</updated>
-      <workItem from="1782879429868" duration="6508000" />
+      <workItem from="1782879429868" duration="12526000" />
     </task>
     <task id="LOCAL-00001" summary="Initial commit">
       <option name="closed" value="true" />
@@ -85,7 +116,15 @@
       <option name="project" value="LOCAL" />
       <updated>1782885213189</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="linting">
+      <option name="closed" value="true" />
+      <created>1782886141151</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1782886141151</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -107,7 +146,9 @@
     <MESSAGE value="Initial commit 2" />
     <MESSAGE value="Add tests" />
     <MESSAGE value="Add tests abd nore graphics" />
-    <option name="LAST_COMMIT_MESSAGE" value="Add tests abd nore graphics" />
+    <MESSAGE value="\linting" />
+    <MESSAGE value="linting" />
+    <option name="LAST_COMMIT_MESSAGE" value="linting" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>

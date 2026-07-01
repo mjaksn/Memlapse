@@ -51,3 +51,28 @@ def test_seek_before_open_returns_empty(seeded_db):
         assert engine.seek(1_000) == (None, [])
     finally:
         engine.close()
+
+
+def test_heads_before_open_returns_empty(seeded_db):
+    db, _ = seeded_db
+    engine = PlaybackEngine(db_path=db)
+    try:
+        assert engine.heads(1_000) == {}  # recording_id is None
+    finally:
+        engine.close()
+
+
+def test_heads_returns_captured_bytes(tmp_db, sample_regions):
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    captured = {sample_regions[0].base_addr: b"MZ\x90\x90"}
+    dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 1, 1, 1),
+                   sample_regions, captured)
+    conn.close()
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.heads(1_000) == captured
+    finally:
+        engine.close()

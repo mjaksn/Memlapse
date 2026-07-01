@@ -16,9 +16,14 @@ import time
 import psutil
 from PySide6.QtCore import QThread, Signal
 
+from ..analytics import is_executable
 from ..storage import connect
 from ..storage.dao import Dao, ProcState
 from ..win32.memory import ProcessAccessError, ProcessMemory
+
+#: Bytes read from the start of each executable region for content heuristics
+#: (PE header, NOP sled, entropy). Enough to see the tell without bloating the DB.
+HEAD_BYTES = 256
 
 
 def _now_us() -> int:
@@ -82,10 +87,28 @@ class RegionSampler(QThread):
             priv_bytes=int(getattr(minfo, "private", getattr(minfo, "vms", 0)) or 0),
             thread_count=proc.num_threads(),
         )
-        with ProcessMemory(self.pid, want_read=False) as pm:
+        with ProcessMemory(self.pid, want_read=True) as pm:
             regions = pm.regions()
-        dao.add_sample(rec_id, ts, state, regions)
+            heads = self._read_heads(pm, regions)
+        dao.add_sample(rec_id, ts, state, regions, heads)
         self.sampled.emit(ts, len(regions))
+
+    @staticmethod
+    def _read_heads(pm: ProcessMemory, regions) -> dict[int, bytes]:
+        """Read the head of each executable, readable region for content scans.
+
+        Empty when the handle lacks read access (unelevated target); regions
+        that are not executable, unreadable, or return no bytes are skipped.
+        """
+        heads: dict[int, bytes] = {}
+        if not pm.can_read:
+            return heads
+        for r in regions:
+            if is_executable(r.protect) and r.is_readable:
+                data = pm.read(r.base_addr, HEAD_BYTES)
+                if data:
+                    heads[r.base_addr] = data
+        return heads
 
     def _sleep_remaining(self, start: float) -> None:
         remaining = max(0.0, self.interval - (time.monotonic() - start))

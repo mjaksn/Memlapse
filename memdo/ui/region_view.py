@@ -9,14 +9,16 @@ hex panel explains they weren't captured).
 from __future__ import annotations
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QLabel, QPlainTextEdit, QSplitter, QTableView, QVBoxLayout, QWidget,
 )
 
+from ..analytics import RegionVerdict, score_region
 from ..model.region import Region
 from ..win32.memory import ProcessAccessError, ProcessMemory
 from .hexdump import hexdump
+from .theme import heat_color
 
 #: How many bytes to read for the hex preview of a selected region.
 HEX_PREVIEW_BYTES = 512
@@ -32,11 +34,12 @@ def _fmt_size(n: int) -> str:
 
 
 class RegionTableModel(QAbstractTableModel):
-    COLUMNS = ("Base Address", "Size", "State", "Protect", "Type")
+    COLUMNS = ("Base Address", "Size", "State", "Protect", "Type", "Score")
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._rows: list[Region] = []
+        self._verdicts: list[RegionVerdict] = []
 
     def rowCount(self, parent=QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows)
@@ -52,19 +55,34 @@ class RegionTableModel(QAbstractTableModel):
     def data(self, index: QModelIndex, role=Qt.DisplayRole):
         if not index.isValid():
             return None
-        r = self._rows[index.row()]
+        row, col = index.row(), index.column()
+        r = self._rows[row]
+        verdict = self._verdicts[row]
         if role == Qt.DisplayRole:
             return (
                 f"0x{r.base_addr:012x}", _fmt_size(r.size),
                 r.state_str, r.protect_str, r.type_str,
-            )[index.column()]
-        if role == Qt.TextAlignmentRole and index.column() in (1,):
+                str(verdict.score) if verdict.suspicious else "",
+            )[col]
+        if role == Qt.TextAlignmentRole and col in (1, 5):
             return int(Qt.AlignRight | Qt.AlignVCenter)
+        # Suspicious rows get a heat-tinted background and a reason tooltip.
+        if verdict.suspicious:
+            if role == Qt.BackgroundRole:
+                red, green, blue = heat_color(verdict.score / 100.0)
+                return QColor(red, green, blue, 110)  # translucent over dark theme
+            if role == Qt.ToolTipRole:
+                return "; ".join(verdict.reasons)
         return None
 
-    def set_regions(self, rows: list[Region]) -> None:
+    def set_regions(self, rows: list[Region],
+                    heads: dict[int, bytes] | None = None) -> None:
+        heads = heads or {}
         self.beginResetModel()
         self._rows = rows
+        self._verdicts = [
+            score_region(r, head=heads.get(r.base_addr, b"")) for r in rows
+        ]
         self.endResetModel()
 
     def region_at(self, row: int) -> Region | None:
@@ -129,10 +147,11 @@ class RegionView(QWidget):
         )
 
     # --- playback mode: region map from storage, no live reads -------------
-    def show_recorded_regions(self, regions: list[Region], header: str) -> None:
+    def show_recorded_regions(self, regions: list[Region], header: str,
+                              heads: dict[int, bytes] | None = None) -> None:
         self._pid = None
         self._live = False
-        self.model.set_regions(regions)
+        self.model.set_regions(regions, heads)
         self.header.setText(header)
         self.hex.setPlainText("(memory contents not captured in this recording)")
 

@@ -3,9 +3,18 @@
 import pytest
 
 from memdo.analytics import (
-    Mover, SeriesBuffer, leak_rate_bytes_per_sec, linreg_slope, top_movers,
-    zscore,
+    ENTROPY_PACKED, Mover, RegionVerdict, SeriesBuffer, is_executable,
+    leak_rate_bytes_per_sec, linreg_slope, longest_nop_run, score_region,
+    shannon_entropy, top_movers, zscore,
 )
+from memdo.model.region import (
+    MEM_COMMIT, MEM_IMAGE, MEM_MAPPED, MEM_PRIVATE, MEM_RESERVE, PAGE_EXECUTE_READ,
+    PAGE_EXECUTE_READWRITE, PAGE_GUARD, PAGE_READONLY, PAGE_READWRITE, Region,
+)
+
+
+def _region(protect, type_, state=MEM_COMMIT, base=0x1000, size=0x2000):
+    return Region(base_addr=base, size=size, state=state, protect=protect, type=type_)
 
 
 # --- SeriesBuffer ----------------------------------------------------------
@@ -87,3 +96,116 @@ def test_top_movers_ignores_new_pids_and_limits():
     movers = top_movers(prev, curr, n=3)
     assert len(movers) == 3
     assert all(m.pid != 999 for m in movers)
+
+
+# --- is_executable ---------------------------------------------------------
+def test_is_executable_true_for_exec_page():
+    assert is_executable(PAGE_EXECUTE_READ) is True
+
+
+def test_is_executable_false_for_non_exec_page():
+    assert is_executable(PAGE_READONLY) is False
+
+
+def test_is_executable_false_for_guarded_exec_page():
+    assert is_executable(PAGE_EXECUTE_READ | PAGE_GUARD) is False
+
+
+# --- shannon_entropy -------------------------------------------------------
+def test_shannon_entropy_empty_is_zero():
+    assert shannon_entropy(b"") == 0.0
+
+
+def test_shannon_entropy_uniform_bytes_is_max():
+    assert shannon_entropy(bytes(range(256))) == pytest.approx(8.0)
+
+
+def test_shannon_entropy_single_symbol_is_zero():
+    assert shannon_entropy(b"\x00" * 64) == 0.0
+
+
+# --- longest_nop_run -------------------------------------------------------
+def test_longest_nop_run_counts_and_resets():
+    assert longest_nop_run(b"\x90\x90\x00\x90") == 2
+
+
+def test_longest_nop_run_no_nops():
+    assert longest_nop_run(b"\x01\x02\x03") == 0
+
+
+def test_longest_nop_run_empty():
+    assert longest_nop_run(b"") == 0
+
+
+# --- RegionVerdict ---------------------------------------------------------
+def test_region_verdict_suspicious_flag():
+    assert RegionVerdict(0, 0, 0, ()).suspicious is False
+    assert RegionVerdict(0, 0, 10, ("x",)).suspicious is True
+
+
+# --- score_region ----------------------------------------------------------
+def test_score_region_ignores_non_committed():
+    v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE, state=MEM_RESERVE))
+    assert v.score == 0 and v.reasons == ()
+
+
+def test_score_region_ignores_non_executable():
+    v = score_region(_region(PAGE_READWRITE, MEM_PRIVATE))
+    assert v.score == 0 and v.reasons == ()
+
+
+def test_score_region_private_exec_is_core_signal():
+    v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE))
+    assert v.score == 50
+    assert "unbacked" in v.reasons[0]
+
+
+def test_score_region_mapped_exec_scores_lower():
+    v = score_region(_region(PAGE_EXECUTE_READ, MEM_MAPPED))
+    assert v.score == 30
+    assert "stomping" in v.reasons[0]
+
+
+def test_score_region_image_exec_is_benign():
+    v = score_region(_region(PAGE_EXECUTE_READ, MEM_IMAGE))
+    assert v.score == 0 and v.reasons == ()
+
+
+def test_score_region_rwx_adds_points():
+    v = score_region(_region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE))
+    assert v.score == 75  # 50 private + 25 RWX
+    assert any("RWX" in r for r in v.reasons)
+
+
+def test_score_region_mz_header_flagged():
+    v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE), head=b"MZ" + b"\x00" * 10)
+    assert v.score == 70  # 50 + 20 MZ
+    assert any("PE header" in r for r in v.reasons)
+
+
+def test_score_region_nop_sled_flagged():
+    v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE), head=b"\x90" * 16)
+    assert v.score == 60  # 50 + 10 NOP
+    assert any("NOP" in r for r in v.reasons)
+
+
+def test_score_region_high_entropy_flagged():
+    v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE), head=bytes(range(256)))
+    assert v.score == 60  # 50 + 10 entropy
+    assert any("entropy" in r for r in v.reasons)
+
+
+def test_score_region_low_entropy_not_flagged():
+    v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE), head=b"\x00" * 64)
+    assert v.score == 50
+    assert not any("entropy" in r for r in v.reasons)
+
+
+def test_score_region_caps_at_100():
+    head = b"MZ" + b"\x90" * 20 + bytes(range(256))
+    v = score_region(_region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE), head=head)
+    assert v.score == 100  # 50 + 25 + 20 + 10 + 10 = 115, capped
+
+
+def test_entropy_packed_threshold_is_below_max():
+    assert 0.0 < ENTROPY_PACKED < 8.0

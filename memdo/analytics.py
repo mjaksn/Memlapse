@@ -8,9 +8,22 @@ spikes, and a top-movers diff.
 
 from __future__ import annotations
 
-from collections import deque
+import math
+from collections import Counter, deque
 from dataclasses import dataclass
 from typing import Sequence
+
+from .model.region import (
+    MEM_COMMIT,
+    MEM_MAPPED,
+    MEM_PRIVATE,
+    PAGE_EXECUTE,
+    PAGE_EXECUTE_READ,
+    PAGE_EXECUTE_READWRITE,
+    PAGE_EXECUTE_WRITECOPY,
+    PAGE_GUARD,
+    Region,
+)
 
 
 class SeriesBuffer:
@@ -83,6 +96,22 @@ def zscore(values: Sequence[float], latest: float | None = None) -> float:
 
 
 @dataclass(frozen=True, slots=True)
+class WindowStats:
+    count: int
+    minimum: float
+    maximum: float
+    average: float
+
+
+def window_stats(values: Sequence[float]) -> WindowStats:
+    """min / max / mean over a value window (all zeros for an empty window)."""
+    n = len(values)
+    if n == 0:
+        return WindowStats(0, 0.0, 0.0, 0.0)
+    return WindowStats(n, min(values), max(values), sum(values) / n)
+
+
+@dataclass(frozen=True, slots=True)
 class Mover:
     pid: int
     name: str
@@ -107,3 +136,103 @@ def top_movers(
                 movers.append(Mover(pid, name, delta))
     movers.sort(key=lambda m: abs(m.delta_bytes), reverse=True)
     return movers[:n]
+
+
+# --- in-memory injection heuristics ----------------------------------------
+# Structural + content signals for code-injection detection, in the spirit of
+# Volatility's malfind and the "unbacked executable memory" indicator EDRs use.
+# Everything here is a pure function of a Region plus optional bytes, so it runs
+# against live samples *and* replayed recordings, and unit-tests without Win32.
+
+_EXEC_MASK = (
+    PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY
+)
+_WRITE_EXEC = PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY
+
+#: bits/byte above which a buffer looks packed or encrypted (max is 8.0).
+ENTROPY_PACKED = 7.2
+#: minimum run of 0x90 bytes to count as a shellcode NOP sled.
+NOP_SLED_MIN = 16
+
+
+def is_executable(protect: int) -> bool:
+    """True if ``protect`` grants execute and the page is not a guard page."""
+    return bool(protect & _EXEC_MASK) and not (protect & PAGE_GUARD)
+
+
+def shannon_entropy(data: bytes) -> float:
+    """Shannon entropy in bits/byte (0.0..8.0); 0.0 for empty input.
+
+    High values (see :data:`ENTROPY_PACKED`) suggest packed or encrypted
+    payloads rather than plain code or data.
+    """
+    if not data:
+        return 0.0
+    n = len(data)
+    return -sum((c / n) * math.log2(c / n) for c in Counter(data).values())
+
+
+def longest_nop_run(data: bytes) -> int:
+    """Length of the longest run of ``0x90`` bytes (shellcode NOP sled)."""
+    best = run = 0
+    for b in data:
+        run = run + 1 if b == 0x90 else 0
+        if run > best:
+            best = run
+    return best
+
+
+@dataclass(frozen=True, slots=True)
+class RegionVerdict:
+    """Suspicion score (0..100) and human-readable reasons for one region."""
+
+    base_addr: int
+    size: int
+    score: int
+    reasons: tuple[str, ...]
+
+    @property
+    def suspicious(self) -> bool:
+        return self.score > 0
+
+
+def score_region(region: Region, *, head: bytes = b"") -> RegionVerdict:
+    """Heuristic injection score for a single region.
+
+    ``head`` is the first bytes of the region (from ReadProcessMemory) when
+    available; pass ``b""`` to run structural checks only. Scores are additive
+    and capped at 100. A non-executable or non-committed region always scores 0.
+    """
+    if region.state != MEM_COMMIT or not is_executable(region.protect):
+        return RegionVerdict(region.base_addr, region.size, 0, ())
+
+    score = 0
+    reasons: list[str] = []
+
+    # Structural: executable memory that is not backed by an image file is the
+    # core injection tell (reflective loading, hollowing, raw shellcode).
+    if region.type == MEM_PRIVATE:
+        score += 50
+        reasons.append("executable private (unbacked) memory")
+    elif region.type == MEM_MAPPED:
+        score += 30
+        reasons.append("executable mapped memory (possible module stomping)")
+
+    if region.protect & _WRITE_EXEC:
+        score += 25
+        reasons.append("writable + executable (RWX)")
+
+    # Content: only meaningful when the region's head was actually read.
+    if head[:2] == b"MZ":
+        score += 20
+        reasons.append("PE header (MZ) in memory — reflective DLL")
+    if longest_nop_run(head) >= NOP_SLED_MIN:
+        score += 10
+        reasons.append("NOP sled")
+    if head and shannon_entropy(head) >= ENTROPY_PACKED:
+        score += 10
+        reasons.append("high entropy (packed/encrypted)")
+
+    return RegionVerdict(
+        region.base_addr, region.size, min(score, 100), tuple(reasons)
+    )

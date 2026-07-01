@@ -101,10 +101,16 @@ recording(id, target_pid, target_name, started_utc, ended_utc, note)
 process_snapshot(id, recording_id, ts_us, pid, wset_bytes, priv_bytes, thread_count)
 thread(id, recording_id, tid, pid, start_ts, symbol_hint)
 region_snapshot(id, recording_id, ts_us, base_addr, size, protect, state, type)
-region_blob(region_snapshot_id, content BLOB)        -- optional captured bytes
+region_blob(region_snapshot_id, content BLOB)        -- captured head bytes (see below)
 mem_event(id, recording_id, ts_us, tid, kind, addr, size, protect)  -- ETW-sourced, thread-tagged
 ```
 
+- `region_blob` is now **populated** by the sampler: for every *executable,
+  readable* region it stores the first `HEAD_BYTES` (256) of content, keyed to
+  its `region_snapshot` row. This feeds the content heuristics in
+  ["In-memory injection heuristics"](#in-memory-injection-heuristics-live-memory-malware-detection).
+  Recordings made before this feature simply have no blobs and degrade
+  gracefully to structural-only scoring.
 - `mem_event.tid` powers "play back this thread's activity."
 - Index on `(recording_id, ts_us)` and `(recording_id, tid, ts_us)`.
 - Store `ts_us` as **integer microseconds**, not text.
@@ -129,6 +135,11 @@ Each phase is usable on its own.
   at time T from SQLite.
 - **Phase 5 — the payoff:** EtwCollector feeds thread-tagged `mem_event`s;
   filter playback to one TID.
+- **Phase 6 — heuristic detection:** score each region for in-memory code
+  injection (unbacked executable memory, reflective-load PE headers, NOP sleds,
+  packing entropy) and surface it in the region view. Structural + content tiers
+  ship today; the temporal RW→RX transition detector is the next step. See
+  ["In-memory injection heuristics"](#in-memory-injection-heuristics-live-memory-malware-detection).
 
 ---
 
@@ -210,7 +221,9 @@ Pieces:
 - **`analytics.py`** (dependency-free, no numpy): a `SeriesBuffer` ring buffer
   plus the **interpret** layer — least-squares **leak rate** (bytes/sec →
   MB/min), **z-score** anomaly spikes, and a **top-movers** working-set diff.
-  Fully unit-tested (`tests/test_analytics.py`).
+  It also hosts the **injection-scoring** primitives (`score_region`,
+  `shannon_entropy`, …) described in the next section. Fully unit-tested
+  (`tests/test_analytics.py`).
 - **`ui/theme.py`**: neon-on-charcoal palette + green→red heat ramp + pyqtgraph
   defaults, scoped to the dashboard via an object-name'd stylesheet so the
   monitor keeps its native look.
@@ -226,3 +239,197 @@ queued signals; the collectors do the only cross-thread work. No locks.
 Natural next steps: per-process USS via `memory_full_info()`, region-select on
 the timeline for scoped export, and feeding recorded/played-back samples into
 the same view so the dashboard works in playback mode too.
+
+---
+
+## In-memory injection heuristics (live-memory malware detection)
+
+MemDo scores each memory region for signs of **code injection** and surfaces
+the result in the region view. The design follows the technique popularised by
+memory-forensics tooling and reverse-engineered EDRs: **find executable memory
+that is not backed by a file on disk, then corroborate with content signals.**
+
+The immediate inspiration is the *NyxWatch* write-up[^nyxwatch], a C++
+proof-of-concept that walks a process's regions and flags `MEM_PRIVATE`
+executable allocations. The same core idea is the basis of the Volatility
+Framework's `malfind` plugin[^malfind] and maps directly onto MITRE ATT&CK
+**T1055 — Process Injection**[^t1055].
+
+### The core signal: unbacked executable memory
+
+Windows tags every region (`MEMORY_BASIC_INFORMATION.Type`) as one of:
+
+| Type | Value | Meaning |
+|---|---|---|
+| `MEM_IMAGE` | `0x1000000` | Backed by an image file (DLL/EXE) mapped from disk |
+| `MEM_MAPPED` | `0x40000` | Backed by a data file / section object |
+| `MEM_PRIVATE`| `0x20000` | Anonymous, dynamically allocated (heap, stacks, `VirtualAlloc`) |
+
+Legitimate executable code almost always lives in `MEM_IMAGE`. Injected code —
+raw shellcode, reflectively-loaded DLLs, hollowed payloads — typically ends up
+**executable *and* `MEM_PRIVATE`** ("unbacked" or "floating" code), because it
+was written into memory rather than loaded by the image loader. That single
+combination is the highest-signal heuristic in this space.[^malfind]
+
+### The scoring model
+
+`analytics.score_region(region, *, head=b"")` returns a `RegionVerdict`
+(`base_addr`, `size`, `score` 0–100, `reasons`, `suspicious`). Signals are
+**additive** and split into two tiers by whether they need the region's bytes:
+
+| Tier | Signal | Points | Needs bytes? | Rationale |
+|---|---|---:|:--:|---|
+| **Structural** | Executable `MEM_PRIVATE` | +50 | no | Unbacked executable memory — the core injection tell[^malfind] |
+| Structural | Executable `MEM_MAPPED` | +30 | no | Possible **module stomping** (code written over a mapped file) |
+| Structural | Writable **and** executable (RWX/RWXC) | +25 | no | Self-modifying / stager memory; rare in benign code |
+| **Content** | `MZ` header at offset 0 | +20 | yes | PE image in memory → reflective DLL injection[^t1055] |
+| Content | NOP sled (≥ `NOP_SLED_MIN` = 16 × `0x90`) | +10 | yes | Classic shellcode landing zone |
+| Content | Shannon entropy ≥ `ENTROPY_PACKED` = 7.2 bits/byte | +10 | yes | Packed or encrypted payload[^entropy] |
+
+The total is capped at 100. Non-committed or non-executable regions
+short-circuit to score 0. When `head` is empty (no bytes captured — e.g. an
+unelevated live target or a pre-feature recording) the content signals are
+skipped and only the structural tier runs.
+
+Supporting helpers, all pure and unit-tested (`tests/test_analytics.py`):
+
+- `is_executable(protect)` — execute bit set and **not** a guard page.
+- `shannon_entropy(data)` — `H = -Σ pᵢ·log₂ pᵢ`, in bits/byte (0.0–8.0).[^entropy]
+- `longest_nop_run(data)` — longest run of `0x90`.
+
+Suggested triage thresholds (tune against a JIT-heavy baseline — see
+Limitations): **≥ 50 = review, ≥ 75 = likely injection.**
+
+```mermaid
+flowchart TD
+    S["score_region(region, head)"] --> Q{committed AND executable?}
+    Q -- no --> Z["score = 0 (benign)"]
+    Q -- yes --> T{region.type}
+    T -- MEM_PRIVATE --> P["+50 unbacked exec"]
+    T -- MEM_MAPPED --> M["+30 module stomping"]
+    T -- MEM_IMAGE --> N["+0"]
+    P --> W{RWX / RWXC?}
+    M --> W
+    N --> W
+    W -- yes --> WX["+25 writable+executable"]
+    W -- no --> C1{"head starts 'MZ'?"}
+    WX --> C1
+    C1 -- yes --> MZ["+20 PE header"]
+    C1 -- no --> C2{"NOP run ≥ 16?"}
+    MZ --> C2
+    C2 -- yes --> NOP["+10 NOP sled"]
+    C2 -- no --> C3{"entropy ≥ 7.2?"}
+    NOP --> C3
+    C3 -- yes --> EN["+10 packed/encrypted"]
+    C3 -- no --> CAP["score = min(sum, 100)"]
+    EN --> CAP
+```
+
+### End-to-end data flow
+
+The feature is purely additive over the existing collect → store → replay
+spine; each stage feeds the next with no new engine.
+
+```mermaid
+flowchart TD
+    subgraph collect["Collector (QThread)"]
+        A["RegionSampler tick"] -->|VirtualQueryEx| B["regions: list[Region]"]
+        A -->|"ReadProcessMemory<br/>(exec+readable only, 256B)"| C["heads: {base_addr: bytes}"]
+    end
+    B --> D["Dao.add_sample(regions, heads)"]
+    C --> D
+    subgraph store["SQLite (WAL)"]
+        D -->|per-region row| E[(region_snapshot)]
+        D -->|"if head present"| F[(region_blob)]
+    end
+    E --> G["PlaybackEngine.seek(ts)"]
+    F --> H["PlaybackEngine.heads(ts)"]
+    G --> I["RegionTableModel.set_regions(regions, heads)"]
+    H --> I
+    I -->|"score_region per row"| J["RegionVerdict[]"]
+    J --> K["Region view: Score column<br/>+ heat background + reason tooltip"]
+```
+
+**Collection** — `collectors/region.py`. The sampler opens the target with
+`want_read=True` (falling back to map-only if unelevated) and, via
+`RegionSampler._read_heads`, reads the first `HEAD_BYTES` (256) of each region
+that is **executable *and* readable**. Reading only the head of only the
+executable regions keeps the extra `ReadProcessMemory` cost bounded — a handful
+of small reads per tick, not a full address-space dump.
+
+**Storage** — `storage/dao.py`. `add_sample(..., heads=None)` inserts region
+rows one at a time so each captured head can be written to `region_blob` with a
+foreign key to its row. `heads_at(recording_id, ts_us)` reads them back for the
+anchored sample (same "latest at or before *T*" semantics as `regions_at`).
+
+**Replay** — `services/playback.py`. `PlaybackEngine.heads(ts_us)` is kept
+separate from `seek()` so the latter's `(state, regions)` tuple contract is
+unchanged.
+
+**Surface** — `ui/region_view.py`. `RegionTableModel` gained a **Score**
+column. On `set_regions(rows, heads)` it computes a `RegionVerdict` per row and:
+
+- shows the numeric score (blank for benign rows),
+- tints suspicious rows via `theme.heat_color(score/100)` (green→amber→red,
+  translucent so text stays legible on the dark theme), and
+- exposes the human-readable `reasons` as the row tooltip.
+
+Live mode scores structurally (no heads); playback scores with full content
+signals from `region_blob`.
+
+### Threading & performance notes
+
+- All memory reads happen on the **sampler `QThread`**, consistent with the
+  project rule that storage/IO stay off the GUI thread.
+- Storage cost: ≤ 256 bytes per *executable* region per tick. Bounded, but on a
+  large process over a long recording it accumulates — a natural future knob is
+  deduping identical heads or hashing instead of storing raw bytes.
+- Scoring is O(head length) per region and runs on the GUI thread only at
+  `set_regions` time (per seek), which is negligible.
+
+### Limitations & known evasions (stated honestly)
+
+This is a **heuristic triage aid, not a verdict engine.** The same caveats the
+NyxWatch author acknowledges apply here:
+
+1. **JIT false positives.** .NET, the JVM, and JavaScript engines (V8) legally
+   allocate private, executable — sometimes RWX — memory for generated code. A
+   naive scan lights them up. Mitigation is an allowlist / behavioural context,
+   which is why the thresholds above must be tuned against a JIT-heavy baseline.
+2. **RW→RX flip evasion.** Mature loaders allocate `PAGE_READWRITE`, write the
+   payload, then `VirtualProtect` to `PAGE_EXECUTE_READ` — never holding RWX. A
+   single snapshot can miss this. The **temporal** detector below closes it.
+3. **Module stomping into `MEM_IMAGE`.** Overwriting a legitimately-mapped image
+   defeats the "private" check; the +30 `MEM_MAPPED` rule only partially covers
+   the mapped-file variant.
+4. **Snapshot/polling model.** `VirtualQueryEx` + `ReadProcessMemory` sampling
+   is a point-in-time, racy, user-mode view. A kernel callback or ETW
+   Threat-Intelligence source sees the *allocation/protection-change event*
+   itself and is far harder to evade — consistent with this doc's
+   ["hard problem"](#the-hard-problem-stated-honestly) framing.
+
+### Planned: temporal RW→RX transition detector
+
+Because MemDo *records over time*, it can do something a single-snapshot tool
+cannot: diff a region's `protect` across consecutive samples and fire when a
+private region transitions **`PAGE_READWRITE` → `PAGE_EXECUTE_READ`**. That is
+the exact "allocate-RW, write payload, flip-to-RX" pattern EDRs watch for, and
+it directly addresses evasion (2) above. The planned entry point is
+`analytics.score_transition(prev_region, curr_region)`, scored over the
+playback timeline — the feature that makes MemDo *exceed* the source technique
+rather than merely reimplement it.
+
+### References
+
+[^nyxwatch]: *NyxWatch — A Deep Dive into Live Memory Malware Detection (Part I)*,
+    DFIR_rdk, Medium. <https://medium.com/@DFIR_rdk/nyxwatch-a-deep-dive-into-live-memory-malware-detection-part-i-4b33fcfa9fb2>
+[^malfind]: The Volatility Framework's `malfind` plugin detects potentially
+    injected code by locating executable, private (non-file-backed) memory
+    regions and inspecting them for PE (`MZ`) headers. Volatility Foundation —
+    <https://www.volatilityfoundation.org/>.
+[^t1055]: MITRE ATT&CK, *Process Injection* (T1055), including the *Reflective
+    DLL/PE image* variants. <https://attack.mitre.org/techniques/T1055/>.
+[^entropy]: Shannon entropy (C. E. Shannon, *A Mathematical Theory of
+    Communication*, 1948) measured over bytes ranges 0–8 bits/byte; packed or
+    encrypted data approaches the 8.0 maximum, which is why a high threshold
+    (~7.0–7.2) is a common packing indicator. MemDo uses `ENTROPY_PACKED = 7.2`.

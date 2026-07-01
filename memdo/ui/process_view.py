@@ -11,9 +11,11 @@ from __future__ import annotations
 from PySide6.QtCore import (
     QAbstractTableModel, QModelIndex, Qt, QSortFilterProxyModel, Signal,
 )
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import QLineEdit, QTableView, QVBoxLayout, QWidget
 
 from ..model import ProcessInfo
+from .theme import heat_color
 
 
 def _fmt_bytes(n: int) -> str:
@@ -33,6 +35,7 @@ class ProcessTableModel(QAbstractTableModel):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._rows: list[ProcessInfo] = []
+        self._max_ws: int = 0
 
     # --- required overrides ------------------------------------------------
     def rowCount(self, parent=QModelIndex()) -> int:
@@ -67,12 +70,18 @@ class ProcessTableModel(QAbstractTableModel):
 
         if role == Qt.TextAlignmentRole and col in (0, 3, 4, 5):
             return int(Qt.AlignRight | Qt.AlignVCenter)
+
+        # Heat the Working Set cell relative to the busiest process in view.
+        if role == Qt.BackgroundRole and col == 4 and self._max_ws > 0:
+            r, g, b = heat_color(p.wset_bytes / self._max_ws)
+            return QBrush(QColor(r, g, b, 90))
         return None
 
     # --- data update -------------------------------------------------------
     def set_processes(self, rows: list[ProcessInfo]) -> None:
         self.beginResetModel()
         self._rows = rows
+        self._max_ws = max((r.wset_bytes for r in rows), default=0)
         self.endResetModel()
 
     def process_at(self, row: int) -> ProcessInfo | None:

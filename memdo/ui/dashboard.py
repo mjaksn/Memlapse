@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..analytics import (
-    SeriesBuffer, leak_rate_bytes_per_sec, top_movers, zscore,
+    SeriesBuffer, leak_rate_bytes_per_sec, top_movers, window_stats, zscore,
 )
 from ..model import ProcessInfo, SystemSample
 from . import theme
@@ -98,9 +98,13 @@ class ProcessBar(QWidget):
             r, g, b = theme.heat_color(self._color_frac)
             p.setBrush(QColor(r, g, b))
             p.drawRoundedRect(0, 4, int(w * self._width_frac), h - 8, 5, 5)
-        p.setPen(QColor(theme.TEXT))
+        # Labels sit on top of the bright heat fill, so use bold, near-black
+        # text — dark and thick reads cleanly over green/amber/red.
+        font = p.font()
+        font.setBold(True)
+        p.setFont(font)
+        p.setPen(QColor("#0b0f14"))
         p.drawText(8, 0, w - 16, h, Qt.AlignVCenter | Qt.AlignLeft, self._name)
-        p.setPen(QColor(theme.MUTED))
         p.drawText(8, 0, w - 16, h, Qt.AlignVCenter | Qt.AlignRight, self._text)
         p.end()
 
@@ -168,7 +172,21 @@ class DashboardView(QWidget):
             fillLevel=0,
             brush=pg.mkBrush(0, 229, 255, 45),
         )
+        # Draggable time-window selector (hidden until the user toggles Select).
+        self.region = pg.LinearRegionItem(
+            values=(-60.0, 0.0),
+            brush=pg.mkBrush(255, 63, 180, 40),
+            pen=pg.mkPen(theme.ACCENT_2, width=1),
+            hoverBrush=pg.mkBrush(255, 63, 180, 70),
+        )
+        self.region.setZValue(10)
+        self.region.hide()
+        self.plot.addItem(self.region)
+        self.region.sigRegionChanged.connect(self._on_region)
         chart_lay.addWidget(self.plot)
+        self.selection_label = QLabel("")
+        self.selection_label.setObjectName("Selection")
+        chart_lay.addWidget(self.selection_label)
         top.addWidget(chart_frame, 1)
         root.addLayout(top, 1)
 
@@ -187,7 +205,12 @@ class DashboardView(QWidget):
         self.insight = QLabel("Collecting telemetry…")
         self.insight.setObjectName("Insight")
         bottom.addWidget(self.insight, 1)
-        self.export_btn = QPushButton("Export window")
+        self.select_btn = QPushButton("Select window")
+        self.select_btn.setObjectName("Select")
+        self.select_btn.setCheckable(True)
+        self.select_btn.toggled.connect(self._toggle_select)
+        bottom.addWidget(self.select_btn)
+        self.export_btn = QPushButton("Export")
         self.export_btn.setObjectName("Export")
         self.export_btn.clicked.connect(self._export)
         bottom.addWidget(self.export_btn)
@@ -248,24 +271,98 @@ class DashboardView(QWidget):
         per_min = leak_rate_bytes_per_sec(times[-60:], used[-60:]) * 60
         z = zscore(self._percent.values()[-120:])
 
+        climbing = per_min > LEAK_WARN_PER_MIN
+        falling = per_min < -LEAK_WARN_PER_MIN
+        anomaly = abs(z) >= ANOMALY_Z
+        pct = self._latest_system.percent if self._latest_system else 0.0
+
         parts: list[str] = []
-        if per_min > LEAK_WARN_PER_MIN:
+        if climbing:
             parts.append(f"▲ RAM climbing {_fmt_bytes(per_min)}/min")
-        elif per_min < -LEAK_WARN_PER_MIN:
+        elif falling:
             parts.append(f"▼ RAM falling {_fmt_bytes(-per_min)}/min")
         else:
             parts.append("● RAM steady")
-        if abs(z) >= ANOMALY_Z:
+        if anomaly:
             parts.append(f"⚠ anomaly z={z:.1f}")
         if self._mover_text:
             parts.append(f"mover: {self._mover_text}")
         self.insight.setText("      ".join(parts))
 
+        # React visibly: colour the strip and pulse the RAM gauge under stress.
+        if anomaly or pct >= 90.0:
+            color = theme.DANGER
+        elif climbing:
+            color = theme.WARN
+        elif falling:
+            color = theme.ACCENT
+        else:
+            color = theme.OK
+        self.insight.setStyleSheet(f"color: {color}; font-size: 12px;")
+        self.ram_gauge.set_alert(anomaly or pct >= 90.0)
+
     def _on_render(self) -> None:
         self.ram_gauge.animate_step()
         self.swap_gauge.animate_step()
 
+    # --- time-window selection --------------------------------------------
+    def _toggle_select(self, checked: bool) -> None:
+        if checked:
+            self.region.setRegion((-60.0, 0.0))
+            self.region.show()
+            self._on_region()
+        else:
+            self.region.hide()
+            self.selection_label.setText("")
+
+    def _on_region(self, *_args) -> None:
+        if not self.region.isVisible():
+            return
+        vals = [pc for _t, pc in self._selected_points()]
+        if not vals:
+            self.selection_label.setText("selection: no samples in range")
+            return
+        x0, x1 = sorted(self.region.getRegion())
+        st = window_stats(vals)
+        self.selection_label.setText(
+            f"◧ selection  {x1 - x0:.0f}s   "
+            f"avg {st.average:.1f}%   peak {st.maximum:.1f}%   "
+            f"min {st.minimum:.1f}%   n={st.count}"
+        )
+
+    def _selected_points(self) -> list[tuple[int, float]]:
+        """(ts_us, percent) points inside the selector, newest window at right."""
+        times = self._percent.times()
+        pcts = self._percent.values()
+        if not times:
+            return []
+        now = times[-1]
+        x0, x1 = sorted(self.region.getRegion())
+        return [
+            (t, pc)
+            for t, pc in zip(times, pcts)
+            if x0 <= (t - now) / 1_000_000 <= x1
+        ]
+
     # --- export -----------------------------------------------------------
+    def _export_rows(self) -> list[dict]:
+        """Rows for export: the selected window if Select is active, else all."""
+        times = self._percent.times()
+        pcts = self._percent.values()
+        used = self._used.values()
+        rows = [
+            {"ts_us": t, "percent": pc, "used_bytes": int(u)}
+            for t, pc, u in zip(times, pcts, used)
+        ]
+        if self.region.isVisible() and times:
+            now = times[-1]
+            x0, x1 = sorted(self.region.getRegion())
+            rows = [
+                r for r in rows
+                if x0 <= (r["ts_us"] - now) / 1_000_000 <= x1
+            ]
+        return rows
+
     def _export(self) -> None:
         path, _filter = QFileDialog.getSaveFileName(
             self, "Export memory window", "memdo-window",
@@ -273,12 +370,7 @@ class DashboardView(QWidget):
         )
         if not path:
             return
-        rows = [
-            {"ts_us": t, "percent": pc, "used_bytes": int(u)}
-            for t, pc, u in zip(
-                self._percent.times(), self._percent.values(), self._used.values()
-            )
-        ]
+        rows = self._export_rows()
         if path.lower().endswith(".json"):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(rows, f, indent=2)

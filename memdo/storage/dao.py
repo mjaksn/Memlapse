@@ -58,8 +58,15 @@ class Dao:
         self.conn.commit()
 
     def add_sample(self, recording_id: int, ts_us: int, state: ProcState,
-                   regions: list[Region]) -> None:
-        """Persist one full sample (process stats + region map) atomically."""
+                   regions: list[Region],
+                   heads: dict[int, bytes] | None = None) -> None:
+        """Persist one full sample (process stats + region map) atomically.
+
+        ``heads`` optionally maps a region's ``base_addr`` to the first bytes
+        read from it; those are stored in region_blob for content heuristics.
+        Regions are inserted one at a time so each blob can reference its row.
+        """
+        heads = heads or {}
         self.conn.execute(
             "INSERT INTO process_snapshot"
             "(recording_id, ts_us, pid, wset_bytes, priv_bytes, thread_count) "
@@ -67,13 +74,20 @@ class Dao:
             (recording_id, ts_us, state.pid, state.wset_bytes,
              state.priv_bytes, state.thread_count),
         )
-        self.conn.executemany(
-            "INSERT INTO region_snapshot"
-            "(recording_id, ts_us, base_addr, size, protect, state, type) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [(recording_id, ts_us, r.base_addr, r.size, r.protect, r.state, r.type)
-             for r in regions],
-        )
+        for r in regions:
+            cur = self.conn.execute(
+                "INSERT INTO region_snapshot"
+                "(recording_id, ts_us, base_addr, size, protect, state, type) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (recording_id, ts_us, r.base_addr, r.size, r.protect, r.state, r.type),
+            )
+            head = heads.get(r.base_addr)
+            if head:
+                self.conn.execute(
+                    "INSERT INTO region_blob(region_snapshot_id, content) "
+                    "VALUES (?, ?)",
+                    (cur.lastrowid, head),
+                )
         self.conn.commit()
 
     # --- reads (playback side) --------------------------------------------
@@ -117,3 +131,24 @@ class Dao:
         ).fetchall()
         return [Region(base_addr=b, size=s, state=st, protect=p, type=t)
                 for (b, s, st, p, t) in rows]
+
+    def heads_at(self, recording_id: int, ts_us: int) -> dict[int, bytes]:
+        """Captured region head bytes from the latest sample at or before ts_us.
+
+        Maps ``base_addr -> content`` for regions whose bytes were recorded
+        (executable ones); pairs with :meth:`regions_at` to feed content
+        heuristics during playback. Empty when nothing was captured.
+        """
+        anchor = self.conn.execute(
+            "SELECT MAX(ts_us) FROM region_snapshot WHERE recording_id=? AND ts_us<=?",
+            (recording_id, ts_us),
+        ).fetchone()[0]
+        if anchor is None:
+            return {}
+        rows = self.conn.execute(
+            "SELECT rs.base_addr, rb.content FROM region_snapshot rs "
+            "JOIN region_blob rb ON rb.region_snapshot_id = rs.id "
+            "WHERE rs.recording_id=? AND rs.ts_us=?",
+            (recording_id, anchor),
+        ).fetchall()
+        return {b: bytes(c) for (b, c) in rows}

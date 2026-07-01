@@ -26,12 +26,16 @@ def test_region_model(rmodel, sample_regions):
     from PySide6.QtCore import Qt, QModelIndex
     rmodel.set_regions(sample_regions)
     assert rmodel.rowCount() == 2
-    assert rmodel.columnCount() == 5
+    assert rmodel.columnCount() == 6
     assert rmodel.headerData(0, Qt.Horizontal, Qt.DisplayRole) == "Base Address"
+    assert rmodel.headerData(5, Qt.Horizontal, Qt.DisplayRole) == "Score"
     assert rmodel.headerData(0, Qt.Vertical, Qt.DisplayRole) is None
     assert rmodel.data(rmodel.index(0, 0), Qt.DisplayRole) == "0x000000010000"
     assert rmodel.data(rmodel.index(0, 1), Qt.DisplayRole) == "4.0K"
     assert rmodel.data(rmodel.index(0, 2), Qt.DisplayRole) == "Commit"
+    # Both sample regions are non-executable -> benign: blank score, no colour.
+    assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == ""
+    assert rmodel.data(rmodel.index(0, 0), Qt.BackgroundRole) is None
     # Size column is right-aligned; other role/invalid index -> None.
     from PySide6.QtCore import Qt as _Qt
     assert rmodel.data(rmodel.index(0, 1), _Qt.TextAlignmentRole) is not None
@@ -40,6 +44,34 @@ def test_region_model(rmodel, sample_regions):
     assert rmodel.data(rmodel.index(0, 0), Qt.DecorationRole) is None
     assert rmodel.region_at(5) is None
     assert rmodel.region_at(0) is sample_regions[0]
+
+
+def test_region_model_flags_suspicious_region(rmodel):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor
+    from memdo.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    r = Region(0x30000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    rmodel.set_regions([r])
+    # Executable private memory scores 50 (structural, no head bytes needed).
+    assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == "50"
+    assert rmodel.data(rmodel.index(0, 5), Qt.TextAlignmentRole) is not None
+    bg = rmodel.data(rmodel.index(0, 0), Qt.BackgroundRole)
+    assert isinstance(bg, QColor)
+    assert "unbacked" in rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    # A flagged row still returns None for roles we don't special-case.
+    assert rmodel.data(rmodel.index(0, 0), Qt.DecorationRole) is None
+
+
+def test_region_model_content_score_with_heads(rmodel):
+    from PySide6.QtCore import Qt
+    from memdo.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    r = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    rmodel.set_regions([r], {0x40000: b"MZ" + b"\x00" * 8})
+    assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == "70"  # 50 + 20 (MZ)
 
 
 def test_on_region_selected_invalid_clears_hex(view, sample_regions, monkeypatch):

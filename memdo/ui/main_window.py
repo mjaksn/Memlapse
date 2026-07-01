@@ -230,6 +230,7 @@ class MainWindow(QMainWindow):
         if self._mode != "playback" or self.playback is None:
             return
         state, regions = self.playback.seek(ts_us)
+        heads = self.playback.heads(ts_us)
         if state is not None:
             header = (
                 f"Recording #{self.playback.recording_id} — PID {state.pid} — "
@@ -241,7 +242,7 @@ class MainWindow(QMainWindow):
             )
         else:
             header = f"Recording #{self.playback.recording_id} — no data at this time"
-        self.region_view.show_recorded_regions(regions, header)
+        self.region_view.show_recorded_regions(regions, header, heads)
 
     # --- shutdown ---------------------------------------------------------
     def closeEvent(self, event) -> None:
