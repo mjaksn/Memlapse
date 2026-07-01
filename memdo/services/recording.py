@@ -54,9 +54,12 @@ class RecordingManager(QObject):
         sampler.start()
 
     def stop(self) -> None:
-        if self._sampler is not None:
-            self._sampler.stop()
-            self._sampler.wait(3000)
+        # Capture locally: _on_finished may null self._sampler synchronously
+        # (e.g. when the sampler emits finished during stop()).
+        sampler = self._sampler
+        if sampler is not None:
+            sampler.stop()
+            sampler.wait(3000)
 
     def _on_finished(self, reason: str) -> None:
         self._sampler = None

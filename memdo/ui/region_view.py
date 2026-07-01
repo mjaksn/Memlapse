@@ -89,6 +89,9 @@ class RegionView(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.selectionModel().currentRowChanged.connect(self._on_region_selected)
+        # Clearing the region list should not leave a stale hex dump behind
+        # (e.g. when switching back to Live mode).
+        self.model.modelReset.connect(self._on_model_reset)
 
         self.hex = QPlainTextEdit(self)
         self.hex.setReadOnly(True)
@@ -132,6 +135,10 @@ class RegionView(QWidget):
         self.model.set_regions(regions)
         self.header.setText(header)
         self.hex.setPlainText("(memory contents not captured in this recording)")
+
+    def _on_model_reset(self) -> None:
+        if self.model.rowCount() == 0:
+            self.hex.clear()
 
     def _on_region_selected(self, current: QModelIndex, _prev: QModelIndex) -> None:
         region = self.model.region_at(current.row()) if current.isValid() else None

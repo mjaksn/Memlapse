@@ -175,3 +175,54 @@ tests/
 docs/
   ARCHITECTURE.md
 ```
+
+---
+
+## Dashboard view (vivid near-live surface)
+
+Alongside the forensic monitor, MemDo has a **Dashboard** tab: a vivid,
+near-live overview built to *select, drill-down, interpret, and export*
+memory data. It is purely **additive** — it reuses the existing collector
+streams rather than introducing a parallel engine, and the forensic monitor
+is untouched.
+
+```
+QTabWidget (central widget)
+  ├─ Dashboard  ──────────────►  DashboardView
+  └─ Forensic Monitor  ───────►  QSplitter(ProcessView | RegionView)   (unchanged)
+```
+
+Data flow:
+
+```
+SystemCollector (QThread, 1 Hz)  ──updated(SystemSample)──►  DashboardView.update_system
+ProcessCollector (QThread, 1 Hz) ──updated(list[ProcessInfo])─┬─► MainWindow._on_processes  (monitor)
+                                                              └─► DashboardView.update_processes
+DashboardView.processActivated(pid,name) ──► MainWindow  ──► switch to Monitor tab + select pid  (drill-in)
+```
+
+Pieces:
+
+- **`collectors/system.py` — `SystemCollector`**: mirrors `ProcessCollector`
+  (own `QThread`, responsive-sleep loop), emitting a `SystemSample`
+  (`model/system.py`) from `virtual_memory()` + `swap_memory()`. This fills the
+  one gap in the existing collectors — system-wide totals.
+- **`analytics.py`** (dependency-free, no numpy): a `SeriesBuffer` ring buffer
+  plus the **interpret** layer — least-squares **leak rate** (bytes/sec →
+  MB/min), **z-score** anomaly spikes, and a **top-movers** working-set diff.
+  Fully unit-tested (`tests/test_analytics.py`).
+- **`ui/theme.py`**: neon-on-charcoal palette + green→red heat ramp + pyqtgraph
+  defaults, scoped to the dashboard via an object-name'd stylesheet so the
+  monitor keeps its native look.
+- **`ui/gauges.py` — `AnimatedGauge`**: 270° arc gauge eased by a ~30 fps render
+  timer, decoupled from the 1 Hz data cadence.
+- **`ui/dashboard.py` — `DashboardView`**: composes the gauges, a scrolling
+  pyqtgraph RAM timeline, a heat-ranked top-process bar list (click → drill-in),
+  the interpret strip, and CSV/JSON **export** of the current window.
+
+**Threading note:** all dashboard aggregation happens on the GUI thread from
+queued signals; the collectors do the only cross-thread work. No locks.
+
+Natural next steps: per-process USS via `memory_full_info()`, region-select on
+the timeline for scoped export, and feeding recorded/played-back samples into
+the same view so the dashboard works in playback mode too.

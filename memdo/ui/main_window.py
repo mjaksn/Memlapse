@@ -17,14 +17,15 @@ import time
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDockWidget, QLabel, QMainWindow, QMenu, QMessageBox, QSplitter, QToolBar,
-    QToolButton,
+    QDockWidget, QLabel, QMainWindow, QMenu, QMessageBox, QSplitter, QTabWidget,
+    QToolBar, QToolButton,
 )
 
-from ..collectors import ProcessCollector
+from ..collectors import ProcessCollector, SystemCollector
 from ..model import ProcessInfo
 from ..services import PlaybackEngine, RecordingManager
 from ..win32 import privileges
+from .dashboard import DashboardView
 from .process_view import ProcessView
 from .region_view import RegionView
 from .timeline import TimelineWidget
@@ -57,7 +58,16 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.region_view)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
-        self.setCentralWidget(splitter)
+
+        # A vivid, near-live dashboard sits alongside the forensic monitor.
+        self.dashboard = DashboardView(self)
+        self.dashboard.processActivated.connect(self._on_dashboard_activate)
+
+        self._monitor_tab = splitter
+        self.tabs = QTabWidget(self)
+        self.tabs.addTab(self.dashboard, "Dashboard")
+        self.tabs.addTab(splitter, "Forensic Monitor")
+        self.setCentralWidget(self.tabs)
 
         self.process_view.processSelected.connect(self._on_process_selected)
 
@@ -87,7 +97,13 @@ class MainWindow(QMainWindow):
         # --- live process stream -------------------------------------------
         self.collector = ProcessCollector(interval=1.0, parent=self)
         self.collector.updated.connect(self._on_processes)
+        self.collector.updated.connect(self.dashboard.update_processes)
         self.collector.start()
+
+        # --- system-wide memory stream (drives the dashboard) --------------
+        self.system_collector = SystemCollector(interval=1.0, parent=self)
+        self.system_collector.updated.connect(self.dashboard.update_system)
+        self.system_collector.start()
 
     # --- toolbar ----------------------------------------------------------
     def _build_toolbar(self) -> None:
@@ -129,6 +145,11 @@ class MainWindow(QMainWindow):
             self.record_action.setEnabled(True)
         if self._mode == "live":
             self.region_view.show_live_process(pid, name)
+
+    def _on_dashboard_activate(self, pid: int, name: str) -> None:
+        """Drill from the dashboard into the forensic monitor for a process."""
+        self.tabs.setCurrentWidget(self._monitor_tab)
+        self.process_view.select_pid(pid)
 
     def _enter_live_mode(self) -> None:
         if self.recorder.is_recording:
@@ -227,6 +248,8 @@ class MainWindow(QMainWindow):
         self.recorder.stop()
         self.collector.stop()
         self.collector.wait(2000)
+        self.system_collector.stop()
+        self.system_collector.wait(2000)
         if self.playback is not None:
             self.playback.close()
         super().closeEvent(event)

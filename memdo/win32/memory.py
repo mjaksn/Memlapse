@@ -105,7 +105,7 @@ class ProcessMemory:
             if not written:
                 break
             region_size = mbi.RegionSize
-            if region_size == 0:
+            if region_size == 0:  # pragma: no cover - defensive; VQE never returns 0-size
                 break
             if include_free or mbi.State != MEM_FREE:
                 out.append(Region(

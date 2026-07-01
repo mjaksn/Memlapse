@@ -114,6 +114,10 @@ class ProcessView(QWidget):
         layout.addWidget(self.filter_box)
         layout.addWidget(self.table)
 
+    def select_pid(self, pid: int) -> None:
+        """Programmatically select a process by pid (used for drill-in)."""
+        self._reselect_pid(pid)
+
     def update_processes(self, rows: list[ProcessInfo]) -> None:
         self.model.set_processes(rows)
         self.table.resizeColumnsToContents()

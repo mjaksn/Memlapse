@@ -13,6 +13,10 @@ threads. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
   the recording with the timeline to replay how its regions and footprint
   evolved.
 
+- **Dashboard** — a vivid, near-live overview tab: system RAM/swap gauges, a
+  scrolling usage timeline, a heat-ranked top-process list (click to drill into
+  the monitor), leak/anomaly interpretation, and CSV/JSON export of the window.
+
 Next: per-thread memory activity via ETW (Phase 5).
 
 ## Use
