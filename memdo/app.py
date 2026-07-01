@@ -15,15 +15,21 @@ from .ui import MainWindow
 from .win32 import privileges
 
 
-def main() -> int:
+def should_relaunch_elevated(argv: list[str]) -> bool:
+    """True if the user asked to elevate and we aren't already elevated."""
+    return "--elevate" in argv and not privileges.is_elevated()
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv if argv is None else argv
+
     # Best-effort: enable SeDebugPrivilege if we already have the rights.
     privileges.enable_se_debug_privilege()
 
-    if "--elevate" in sys.argv and not privileges.is_elevated():
-        if privileges.relaunch_as_admin():
-            return 0  # elevated instance launched; this one exits
+    if should_relaunch_elevated(argv) and privileges.relaunch_as_admin():
+        return 0  # elevated instance launched; this one exits
 
-    app = QApplication(sys.argv)
+    app = QApplication(argv)
     app.setApplicationName("MemDo")
 
     window = MainWindow()
