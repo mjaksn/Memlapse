@@ -1,16 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="c41fce82-5249-4457-8558-b137dd811e01" name="Changes" comment="Add tests">
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/ARCHITECTURE.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/ARCHITECTURE.md" afterDir="false" />
+    <list default="true" id="c41fce82-5249-4457-8558-b137dd811e01" name="Changes" comment="Add tests abd nore graphics">
       <change beforePath="$PROJECT_DIR$/memdo/collectors/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/collectors/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/memdo/model/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/model/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/memdo/services/recording.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/services/recording.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/memdo/ui/main_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/ui/main_window.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/memdo/ui/process_view.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/ui/process_view.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/memdo/ui/region_view.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/ui/region_view.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/memdo/win32/memory.py" beforeDir="false" afterPath="$PROJECT_DIR$/memdo/win32/memory.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -59,7 +51,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1782879428830</updated>
-      <workItem from="1782879429868" duration="5740000" />
+      <workItem from="1782879429868" duration="6508000" />
     </task>
     <task id="LOCAL-00001" summary="Initial commit">
       <option name="closed" value="true" />
@@ -85,7 +77,15 @@
       <option name="project" value="LOCAL" />
       <updated>1782882441073</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="Add tests abd nore graphics">
+      <option name="closed" value="true" />
+      <created>1782885213189</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1782885213189</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -106,7 +106,8 @@
     <MESSAGE value="Initial commit" />
     <MESSAGE value="Initial commit 2" />
     <MESSAGE value="Add tests" />
-    <option name="LAST_COMMIT_MESSAGE" value="Add tests" />
+    <MESSAGE value="Add tests abd nore graphics" />
+    <option name="LAST_COMMIT_MESSAGE" value="Add tests abd nore graphics" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
