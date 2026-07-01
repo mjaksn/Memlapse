@@ -44,6 +44,16 @@ def test_animate_noop_when_settled(gauge):
     assert gauge._value == 50.0
 
 
+def test_alert_pulses_and_paints_glow(gauge):
+    gauge.set_alert(True)
+    gauge.set_target(95.0)
+    before = gauge._pulse
+    gauge.animate_step()  # alert branch advances the pulse
+    assert gauge._pulse != before
+    assert not gauge.grab().isNull()  # paintEvent glow branch
+    gauge.set_alert(False)
+
+
 def test_paint_event_runs_with_and_without_subtitle(gauge):
     gauge.set_target(75.0, subtitle="12.3 GB")
     gauge._value = 75.0

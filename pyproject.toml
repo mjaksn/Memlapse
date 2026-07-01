@@ -1,6 +1,6 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-markers"
+addopts = "-q --strict-markers --cov --cov-report=term-missing"
 
 [tool.coverage.run]
 branch = true
@@ -10,6 +10,7 @@ omit = ["memdo/__init__.py"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
+fail_under = 100
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.:",

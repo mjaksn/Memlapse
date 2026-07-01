@@ -29,6 +29,9 @@ class FakeApp:
     def setApplicationName(self, name):
         self.name = name
 
+    def setStyleSheet(self, qss):
+        self.qss = qss
+
     def exec(self):
         return 0
 

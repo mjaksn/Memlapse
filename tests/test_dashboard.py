@@ -181,3 +181,46 @@ def test_export_cancelled(dash, tmp_path, monkeypatch):
                         lambda *a, **k: ("", ""))
     _seed_export(dash)
     dash._export()  # cancelled -> no file written, no raise
+
+
+# --- time-window selection -------------------------------------------------
+def _seed_window(dash):
+    base = 100_000_000
+    for k, pc in [(0, 50.0), (30, 60.0), (60, 70.0)]:  # seconds -> µs
+        dash._percent.append(base + k * 1_000_000, pc)
+        dash._used.append(base + k * 1_000_000, pc * 1000)
+
+
+def test_select_toggle_reports_stats(dash):
+    dash.select_btn.setChecked(True)  # -> _toggle_select(True)
+    assert dash.region.isVisible()
+    assert "no samples" in dash.selection_label.text()  # nothing buffered yet
+
+    _seed_window(dash)
+    dash.region.setRegion((-60.0, 0.0))
+    dash._on_region()
+    text = dash.selection_label.text()
+    assert "avg 60.0%" in text and "peak 70.0%" in text
+
+    dash.select_btn.setChecked(False)  # -> _toggle_select(False)
+    assert not dash.region.isVisible()
+    assert dash.selection_label.text() == ""
+
+
+def test_on_region_ignored_when_hidden(dash):
+    dash._on_region()  # region hidden -> early return
+    assert dash.selection_label.text() == ""
+
+
+def test_selected_points_empty_without_samples(dash):
+    dash.region.show()
+    assert dash._selected_points() == []
+
+
+def test_export_rows_filters_to_selection(dash):
+    _seed_window(dash)
+    assert len(dash._export_rows()) == 3  # no selection -> everything
+    dash.region.show()
+    dash.region.setRegion((-5.0, 0.0))  # only the newest (0s ago) sample
+    rows = dash._export_rows()
+    assert len(rows) == 1 and rows[0]["percent"] == 70.0
