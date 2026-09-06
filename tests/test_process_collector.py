@@ -2,9 +2,9 @@
 
 import psutil
 
-import memdo.collectors.process as proc_mod
-from memdo.collectors.process import ProcessCollector
-from memdo.win32.processes import SystemProcess
+import memlapse.collectors.process as proc_mod
+from memlapse.collectors.process import ProcessCollector
+from memlapse.win32.processes import SystemProcess
 
 
 def _sp(pid, name="p.exe", threads=3, wset=100, private=50, created=1):

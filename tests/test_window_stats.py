@@ -1,6 +1,6 @@
 """Unit tests for the selection-window stats helper."""
 
-from memdo.analytics import WindowStats, window_stats
+from memlapse.analytics import WindowStats, window_stats
 
 
 def test_empty_window_is_all_zero():

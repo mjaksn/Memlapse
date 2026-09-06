@@ -11,8 +11,8 @@ import os
 import psutil
 import pytest
 
-import memdo.win32.processes as procs
-from memdo.win32.processes import (
+import memlapse.win32.processes as procs
+from memlapse.win32.processes import (
     STATUS_INFO_LENGTH_MISMATCH, SYSTEM_PROCESS_INFORMATION, list_processes,
 )
 

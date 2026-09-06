@@ -1,6 +1,6 @@
-# MemDo: Architecture
+# Memlapse: Architecture
 
-MemDo is a **memory forensics tool** for Windows: a Process Explorer / System
+Memlapse is a **memory forensics tool** for Windows: a Process Explorer / System
 Informer-style monitor, with the distinguishing capability of **recording and
 replaying the memory activity of specific threads** in a running process.
 
@@ -138,7 +138,7 @@ mem_event(id, recording_id, ts_us, tid, kind, addr, size, protect)  -- ETW-sourc
 Each phase is usable on its own.
 
 - **Phase 0, skeleton:** PySide6 window, `requirements.txt`, package layout
-  (`memdo/ui`, `memdo/collectors`, `memdo/storage`, `memdo/model`),
+  (`memlapse/ui`, `memlapse/collectors`, `memlapse/storage`, `memlapse/model`),
   SeDebugPrivilege helper, "am I elevated?" check.
 - **Phase 1, live monitor:** process table from a bulk
   `NtQuerySystemInformation` query, refresh timer, sort/filter. A mini
@@ -173,7 +173,7 @@ Each phase is usable on its own.
 ## Proposed package layout
 
 ```
-memdo/
+memlapse/
   __init__.py
   app.py                 # entry point: elevation check, launch Qt app
   model/                 # dataclasses: ProcessInfo, Region, MemEvent, ...
@@ -208,7 +208,7 @@ docs/
 
 ## Dashboard view (vivid near-live surface)
 
-Alongside the forensic monitor, MemDo has a **Dashboard** tab: a vivid,
+Alongside the forensic monitor, Memlapse has a **Dashboard** tab: a vivid,
 near-live overview built to *select, drill-down, interpret, and export*
 memory data. It is purely **additive**, it reuses the existing collector
 streams rather than introducing a parallel engine, and the forensic monitor
@@ -262,7 +262,7 @@ the same view so the dashboard works in playback mode too.
 
 ## In-memory injection heuristics (live-memory malware detection)
 
-MemDo scores each memory region for signs of **code injection** and surfaces
+Memlapse scores each memory region for signs of **code injection** and surfaces
 the result in the region view. The design follows the technique popularised by
 memory-forensics tooling and reverse-engineered EDRs: **find executable memory
 that is not backed by a file on disk, then corroborate with content signals.**
@@ -428,13 +428,13 @@ NyxWatch author acknowledges apply here:
 
 ### Planned: temporal RW→RX transition detector
 
-Because MemDo *records over time*, it can do something a single-snapshot tool
+Because Memlapse *records over time*, it can do something a single-snapshot tool
 cannot: diff a region's `protect` across consecutive samples and fire when a
 private region transitions **`PAGE_READWRITE` → `PAGE_EXECUTE_READ`**. That is
 the exact "allocate-RW, write payload, flip-to-RX" pattern EDRs watch for, and
 it directly addresses evasion (2) above. The planned entry point is
 `analytics.score_transition(prev_region, curr_region)`, scored over the
-playback timeline, the feature that makes MemDo *exceed* the source technique
+playback timeline, the feature that makes Memlapse *exceed* the source technique
 rather than merely reimplement it.
 
 ### References
@@ -450,5 +450,5 @@ rather than merely reimplement it.
 [^entropy]: Shannon entropy (C. E. Shannon, *A Mathematical Theory of
     Communication*, 1948) measured over bytes ranges 0 to 8 bits/byte; packed
     or encrypted data approaches the 8.0 maximum, which is why a high
-    threshold (~7.0 to 7.2) is a common packing indicator. MemDo uses
+    threshold (~7.0 to 7.2) is a common packing indicator. Memlapse uses
     `ENTROPY_PACKED = 7.2`.

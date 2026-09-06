@@ -1,7 +1,7 @@
 """Tests for the dependency-free data models."""
 
-from memdo.model.process import ProcessInfo
-from memdo.model.region import (
+from memlapse.model.process import ProcessInfo
+from memlapse.model.region import (
     MEM_COMMIT, MEM_FREE, MEM_MAPPED, MEM_RESERVE, PAGE_EXECUTE_READ,
     PAGE_GUARD, PAGE_NOACCESS, PAGE_NOCACHE, PAGE_READWRITE, PAGE_WRITECOMBINE,
     Region, protect_str,

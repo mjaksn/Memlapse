@@ -3,9 +3,9 @@
 import pytest
 from PySide6.QtCore import QObject, Signal
 
-from memdo.collectors import RegionSampler
-from memdo.services import RecordingManager
-from memdo.services.recording import DEFAULT_INTERVAL, _default_factory
+from memlapse.collectors import RegionSampler
+from memlapse.services import RecordingManager
+from memlapse.services.recording import DEFAULT_INTERVAL, _default_factory
 
 
 def test_default_factory_builds_region_sampler(qapp):

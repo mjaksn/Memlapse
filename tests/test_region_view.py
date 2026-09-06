@@ -2,9 +2,9 @@
 
 import pytest
 
-import memdo.ui.region_view as region_view_mod
-from memdo.ui.region_view import RegionTableModel, RegionView, _fmt_size
-from memdo.win32.memory import ProcessAccessError
+import memlapse.ui.region_view as region_view_mod
+from memlapse.ui.region_view import RegionTableModel, RegionView, _fmt_size
+from memlapse.win32.memory import ProcessAccessError
 
 
 def test_fmt_size():
@@ -49,7 +49,7 @@ def test_region_model(rmodel, sample_regions):
 def test_region_model_flags_suspicious_region(rmodel):
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QColor
-    from memdo.model.region import (
+    from memlapse.model.region import (
         MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
     )
     r = Region(0x30000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
@@ -66,7 +66,7 @@ def test_region_model_flags_suspicious_region(rmodel):
 
 def test_region_model_content_score_with_heads(rmodel):
     from PySide6.QtCore import Qt
-    from memdo.model.region import (
+    from memlapse.model.region import (
         MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
     )
     r = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)

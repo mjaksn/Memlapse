@@ -9,10 +9,10 @@ import os
 
 import psutil
 
-import memdo.collectors.region as region_mod
-from memdo.collectors.region import RegionSampler
-from memdo.storage import connect
-from memdo.storage.dao import Dao
+import memlapse.collectors.region as region_mod
+from memlapse.collectors.region import RegionSampler
+from memlapse.storage import connect
+from memlapse.storage.dao import Dao
 
 
 def test_run_records_samples(qapp, tmp_db):
@@ -82,7 +82,7 @@ def test_sleep_remaining_runs_and_exits(qapp):
 
 
 # --- _read_heads -----------------------------------------------------------
-from memdo.model.region import (  # noqa: E402
+from memlapse.model.region import (  # noqa: E402
     MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_READWRITE, Region,
 )
 

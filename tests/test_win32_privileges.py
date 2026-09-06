@@ -6,8 +6,8 @@ branch is reachable without actually being elevated.
 
 import ctypes
 
-import memdo.win32.privileges as privileges
-from memdo.win32.privileges import (
+import memlapse.win32.privileges as privileges
+from memlapse.win32.privileges import (
     enable_se_debug_privilege, is_elevated, relaunch_as_admin,
 )
 

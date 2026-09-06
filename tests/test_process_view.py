@@ -3,7 +3,7 @@
 import pytest
 from PySide6.QtCore import Qt
 
-from memdo.ui.process_view import ProcessTableModel, ProcessView, _fmt_bytes
+from memlapse.ui.process_view import ProcessTableModel, ProcessView, _fmt_bytes
 
 
 def test_fmt_bytes():

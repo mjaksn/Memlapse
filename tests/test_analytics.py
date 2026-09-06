@@ -2,12 +2,12 @@
 
 import pytest
 
-from memdo.analytics import (
+from memlapse.analytics import (
     ENTROPY_PACKED, Mover, RegionVerdict, SeriesBuffer, is_executable,
     leak_rate_bytes_per_sec, linreg_slope, longest_nop_run, score_region,
     shannon_entropy, top_movers, zscore,
 )
-from memdo.model.region import (
+from memlapse.model.region import (
     MEM_COMMIT, MEM_IMAGE, MEM_MAPPED, MEM_PRIVATE, MEM_RESERVE, PAGE_EXECUTE_READ,
     PAGE_EXECUTE_READWRITE, PAGE_GUARD, PAGE_READONLY, PAGE_READWRITE, Region,
 )

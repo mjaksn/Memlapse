@@ -2,8 +2,8 @@
 
 import pytest
 
-from memdo.storage import connect
-from memdo.storage.dao import Dao, ProcState
+from memlapse.storage import connect
+from memlapse.storage.dao import Dao, ProcState
 
 
 @pytest.fixture

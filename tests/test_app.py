@@ -1,22 +1,22 @@
 """Tests for the application entry point."""
 
-import memdo.app as app_mod
-from memdo.app import main, should_relaunch_elevated
+import memlapse.app as app_mod
+from memlapse.app import main, should_relaunch_elevated
 
 
 def test_should_relaunch_when_flagged_and_not_elevated(monkeypatch):
     monkeypatch.setattr(app_mod.privileges, "is_elevated", lambda: False)
-    assert should_relaunch_elevated(["memdo", "--elevate"]) is True
+    assert should_relaunch_elevated(["memlapse", "--elevate"]) is True
 
 
 def test_no_relaunch_without_flag(monkeypatch):
     monkeypatch.setattr(app_mod.privileges, "is_elevated", lambda: False)
-    assert should_relaunch_elevated(["memdo"]) is False
+    assert should_relaunch_elevated(["memlapse"]) is False
 
 
 def test_no_relaunch_when_already_elevated(monkeypatch):
     monkeypatch.setattr(app_mod.privileges, "is_elevated", lambda: True)
-    assert should_relaunch_elevated(["memdo", "--elevate"]) is False
+    assert should_relaunch_elevated(["memlapse", "--elevate"]) is False
 
 
 class FakeApp:
@@ -54,7 +54,7 @@ def test_main_relaunches_and_exits(monkeypatch):
     _patch_gui(monkeypatch)
     monkeypatch.setattr(app_mod, "should_relaunch_elevated", lambda argv: True)
     monkeypatch.setattr(app_mod.privileges, "relaunch_as_admin", lambda: True)
-    assert main(["memdo", "--elevate"]) == 0
+    assert main(["memlapse", "--elevate"]) == 0
     assert FakeApp.last is None  # never constructed the GUI
 
 
@@ -62,9 +62,9 @@ def test_main_runs_gui(monkeypatch):
     _patch_gui(monkeypatch)
     FakeApp.last = None
     monkeypatch.setattr(app_mod, "should_relaunch_elevated", lambda argv: False)
-    assert main(["memdo"]) == 0
+    assert main(["memlapse"]) == 0
     assert FakeApp.last is not None
-    assert FakeApp.last.name == "MemDo"
+    assert FakeApp.last.name == "Memlapse"
 
 
 def test_main_runs_gui_when_relaunch_fails(monkeypatch):
@@ -72,5 +72,5 @@ def test_main_runs_gui_when_relaunch_fails(monkeypatch):
     FakeApp.last = None
     monkeypatch.setattr(app_mod, "should_relaunch_elevated", lambda argv: True)
     monkeypatch.setattr(app_mod.privileges, "relaunch_as_admin", lambda: False)
-    assert main(["memdo", "--elevate"]) == 0
+    assert main(["memlapse", "--elevate"]) == 0
     assert FakeApp.last is not None  # fell through to launching the GUI

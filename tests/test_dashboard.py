@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-import memdo.ui.dashboard as dash_mod
-from memdo.ui.dashboard import DashboardView, ProcessBar, _fmt_bytes, _panel
-from memdo.model.system import SystemSample
+import memlapse.ui.dashboard as dash_mod
+from memlapse.ui.dashboard import DashboardView, ProcessBar, _fmt_bytes, _panel
+from memlapse.model.system import SystemSample
 
 
 def _sys(ts, used, total=16 * 1024**3, percent=None, swap_used=0,

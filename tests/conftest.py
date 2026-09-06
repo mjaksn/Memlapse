@@ -11,8 +11,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import QObject, Signal
 
-from memdo.model.process import ProcessInfo
-from memdo.model.region import (
+from memlapse.model.process import ProcessInfo
+from memlapse.model.region import (
     MEM_COMMIT, MEM_IMAGE, MEM_PRIVATE, PAGE_NOACCESS, PAGE_READWRITE, Region,
 )
 
@@ -47,7 +47,7 @@ def sample_regions():
 
 @pytest.fixture
 def tmp_db(tmp_path):
-    return str(tmp_path / "memdo_test.db")
+    return str(tmp_path / "memlapse_test.db")
 
 
 # --- fakes used across service/UI tests ------------------------------------

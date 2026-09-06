@@ -43,7 +43,7 @@ def _fmt_bytes(n: int) -> str:
 class MainWindow(QMainWindow):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("MemDo: Memory Monitor")
+        self.setWindowTitle("Memlapse: Memory Monitor")
         self.resize(1100, 700)
 
         self._mode = "live"          # "live" | "playback"
@@ -209,7 +209,7 @@ class MainWindow(QMainWindow):
 
     def _open_recording(self, recording_id: int) -> None:
         if self.recorder.is_recording:
-            QMessageBox.information(self, "MemDo", "Stop the current recording first.")
+            QMessageBox.information(self, "Memlapse", "Stop the current recording first.")
             return
         if self.playback is not None:
             self.playback.close()

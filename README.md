@@ -1,4 +1,4 @@
-# MemDo
+# Memlapse
 
 A Windows memory forensics tool, Process Explorer / System Informer-style
 monitoring, with recording and playback of the memory activity of specific

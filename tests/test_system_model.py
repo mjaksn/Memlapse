@@ -1,6 +1,6 @@
 """Unit tests for the SystemSample model."""
 
-from memdo.model import SystemSample
+from memlapse.model import SystemSample
 
 
 def _sample() -> SystemSample:

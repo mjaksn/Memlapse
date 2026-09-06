@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0  # elevated instance launched; this one exits
 
     app = QApplication(argv)
-    app.setApplicationName("MemDo")
+    app.setApplicationName("Memlapse")
     app.setStyleSheet(APP_QSS)
 
     window = MainWindow()

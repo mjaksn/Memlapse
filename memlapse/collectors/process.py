@@ -3,7 +3,7 @@
 Runs the shared polling loop (:class:`PollingCollector`) on its own QThread
 and emits a fresh snapshot of every process on each tick. The process table
 comes from one bulk ``NtQuerySystemInformation`` call (see
-:mod:`memdo.win32.processes`), which is a single GIL-free syscall rather
+:mod:`memlapse.win32.processes`), which is a single GIL-free syscall rather
 than a handle open per process; psutil is only consulted for the owning user
 name, once per process instance, since that is not in the bulk table.
 """

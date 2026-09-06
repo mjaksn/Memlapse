@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from memdo.storage import connect, default_db_path
-from memdo.storage.db import _SCHEMA_PATH
+from memlapse.storage import connect, default_db_path
+from memlapse.storage.db import _SCHEMA_PATH
 
 
 def test_connect_applies_schema_and_pragmas(tmp_db):
@@ -33,7 +33,7 @@ def test_schema_file_exists():
 def test_default_db_path_uses_localappdata(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     path = default_db_path()
-    assert path == tmp_path / "MemDo" / "memdo.db"
+    assert path == tmp_path / "Memlapse" / "memlapse.db"
     assert path.parent.is_dir()
 
 
@@ -41,5 +41,5 @@ def test_default_db_path_falls_back_to_home(tmp_path, monkeypatch):
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     path = default_db_path()
-    assert path == tmp_path / ".memdo" / "memdo.db"
+    assert path == tmp_path / ".memlapse" / "memlapse.db"
     assert path.parent.is_dir()

@@ -365,7 +365,7 @@ class DashboardView(QWidget):
 
     def _export(self) -> None:
         path, _filter = QFileDialog.getSaveFileName(
-            self, "Export memory window", "memdo-window",
+            self, "Export memory window", "memlapse-window",
             "CSV (*.csv);;JSON (*.json)",
         )
         if not path:

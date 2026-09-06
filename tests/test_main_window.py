@@ -8,11 +8,11 @@ import os
 
 import pytest
 
-import memdo.storage.db as dbmod
-import memdo.ui.main_window as mw
-from memdo.services.recording import RecordingManager
-from memdo.storage import connect
-from memdo.storage.dao import Dao, ProcState
+import memlapse.storage.db as dbmod
+import memlapse.ui.main_window as mw
+from memlapse.services.recording import RecordingManager
+from memlapse.storage import connect
+from memlapse.storage.dao import Dao, ProcState
 from conftest import FakeCollector, FakeSampler
 
 

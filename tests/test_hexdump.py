@@ -1,6 +1,6 @@
 """Tests for the hex-dump formatter."""
 
-from memdo.ui.hexdump import hexdump
+from memlapse.ui.hexdump import hexdump
 
 
 def test_empty():

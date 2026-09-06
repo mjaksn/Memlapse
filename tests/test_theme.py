@@ -1,7 +1,7 @@
 """Tests for the dashboard theme helpers."""
 
-from memdo.ui import theme
-from memdo.ui.theme import configure_pyqtgraph, heat_color
+from memlapse.ui import theme
+from memlapse.ui.theme import configure_pyqtgraph, heat_color
 
 
 def test_heat_color_endpoints_and_clamping():

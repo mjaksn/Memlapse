@@ -2,7 +2,7 @@
 
 import pytest
 
-from memdo.ui.timeline import TimelineWidget, _fmt_elapsed
+from memlapse.ui.timeline import TimelineWidget, _fmt_elapsed
 
 
 def test_fmt_elapsed():

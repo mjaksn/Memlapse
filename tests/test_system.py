@@ -2,9 +2,9 @@
 
 from types import SimpleNamespace
 
-import memdo.collectors.system as system_mod
-from memdo.collectors.system import SystemCollector
-from memdo.model.system import SystemSample
+import memlapse.collectors.system as system_mod
+from memlapse.collectors.system import SystemCollector
+from memlapse.model.system import SystemSample
 
 
 def test_system_sample_gb_properties():

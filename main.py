@@ -1,6 +1,6 @@
-"""Launcher for MemDo. Run with:  python main.py  (add --elevate for admin)."""
+"""Launcher for Memlapse. Run with:  python main.py  (add --elevate for admin)."""
 
-from memdo.app import main
+from memlapse.app import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

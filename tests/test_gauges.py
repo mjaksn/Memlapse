@@ -6,7 +6,7 @@ repaint) under the offscreen Qt platform.
 
 import pytest
 
-from memdo.ui.gauges import AnimatedGauge
+from memlapse.ui.gauges import AnimatedGauge
 
 
 @pytest.fixture

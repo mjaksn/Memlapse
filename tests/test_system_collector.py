@@ -4,8 +4,8 @@ Exercises the static ``_poll`` (no thread, no QApplication needed) against the
 real host so we know the psutil wiring produces a well-formed SystemSample.
 """
 
-from memdo.collectors import SystemCollector
-from memdo.model import SystemSample
+from memlapse.collectors import SystemCollector
+from memlapse.model import SystemSample
 
 
 def test_poll_returns_valid_sample():

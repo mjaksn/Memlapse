@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from memdo.collectors.base import PollingCollector
+from memlapse.collectors.base import PollingCollector
 
 
 class Counting(PollingCollector):

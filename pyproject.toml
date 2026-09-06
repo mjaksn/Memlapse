@@ -4,8 +4,8 @@ addopts = "-q --strict-markers --cov --cov-report=term-missing"
 
 [tool.coverage.run]
 branch = true
-source = ["memdo"]
-omit = ["memdo/__init__.py"]
+source = ["memlapse"]
+omit = ["memlapse/__init__.py"]
 
 [tool.coverage.report]
 show_missing = true

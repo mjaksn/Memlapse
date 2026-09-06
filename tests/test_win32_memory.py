@@ -8,8 +8,8 @@ import os
 
 import pytest
 
-import memdo.win32.memory as memory
-from memdo.win32.memory import (
+import memlapse.win32.memory as memory
+from memlapse.win32.memory import (
     PROCESS_VM_READ, ProcessAccessError, ProcessMemory, enumerate_regions,
 )
 
