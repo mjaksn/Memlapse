@@ -84,7 +84,7 @@ QLabel#Selection {{ color: {ACCENT_2}; font-size: 11px; }}
 """
 
 
-# Applied app-wide so the whole shell — tabs, toolbar, tables, status bar —
+# Applied app-wide so the whole shell (tabs, toolbar, tables, status bar)
 # reads as one vivid surface, not just the dashboard tab.
 APP_QSS = f"""
 QMainWindow, QDialog {{ background: {BG}; }}

@@ -1,4 +1,4 @@
-# MemDo — Architecture
+# MemDo: Architecture
 
 MemDo is a **memory forensics tool** for Windows: a Process Explorer / System
 Informer–style monitor, with the distinguishing capability of **recording and
@@ -9,7 +9,7 @@ Design constraints:
 - **Native GUI** desktop app (PySide6/Qt)
 - **Local SQLite** storage
 - **Windows** platform
-- **Personal but built to last** — clean, testable, extensible layering
+- **Personal but built to last**, clean, testable, extensible layering
 
 ---
 
@@ -21,7 +21,7 @@ Design constraints:
 | Live plots/timeline | **pyqtgraph** | Built for real-time streaming data inside Qt. matplotlib will choke on live memory graphs; pyqtgraph won't. |
 | Process enumeration + coarse stats | **psutil** | Gives PIDs, threads, working set, RSS, handles without touching raw Win32. |
 | Raw memory access | **ctypes** (or pywin32) over Win32 | `OpenProcess`, `VirtualQueryEx`, `ReadProcessMemory`, `EnumProcessModules`. ctypes keeps deps minimal. |
-| Thread-level memory *activity* | **ETW** via `pywintrace` | The crux of the forensic feature — see "The hard problem" below. |
+| Thread-level memory *activity* | **ETW** via `pywintrace` | The crux of the forensic feature, see "The hard problem" below. |
 | Storage | **SQLite** (stdlib `sqlite3`) | Time-series snapshots + event log. WAL mode for concurrent write-while-read. |
 | Packaging | PyInstaller (later) | One-file elevated exe when desired. |
 
@@ -37,11 +37,11 @@ to get it, in increasing power and cost:
    regions with `VirtualQueryEx` and snapshot committed/working-set bytes,
    region protections, and (optionally) region *contents* for regions of
    interest. Diff consecutive snapshots to see what grew/changed.
-   **Cannot attribute to a thread** — it's process-wide. Good enough for
+   **Cannot attribute to a thread**, it's process-wide. Good enough for
    "watch this process's heap evolve."
 
 2. **ETW (medium, the sweet spot).** Event Tracing for Windows emits kernel
-   events — `VirtualAlloc`/`VirtualFree`, page faults, image loads — and
+   events (`VirtualAlloc`/`VirtualFree`, page faults, image loads) and
    **each event carries the ThreadId**. This is how you legitimately say
    "thread 4210 committed 2 MB here." `pywintrace` (Microsoft's Python ETW lib)
    subscribes to the Kernel Memory and PerfInfo providers. Requires admin.
@@ -89,7 +89,7 @@ baseline** and **2 (ETW) is the forensic engine**, with 3 left as a pluggable
 
 **Threading model that matters for a Qt app:** collectors run on their own
 `QThread`s (or a separate process for ETW, which is chatty), and push data to
-the UI via Qt signals — never touch widgets from a worker thread. Storage
+the UI via Qt signals, never touch widgets from a worker thread. Storage
 writes happen on the collector side so the UI thread stays smooth.
 
 ---
@@ -122,20 +122,20 @@ mem_event(id, recording_id, ts_us, tid, kind, addr, size, protect)  -- ETW-sourc
 
 Each phase is usable on its own.
 
-- **Phase 0 — skeleton:** PySide6 window, `requirements.txt`, package layout
+- **Phase 0, skeleton:** PySide6 window, `requirements.txt`, package layout
   (`memdo/ui`, `memdo/collectors`, `memdo/storage`, `memdo/model`),
   SeDebugPrivilege helper, "am I elevated?" check.
-- **Phase 1 — live monitor:** process table via psutil, refresh timer,
+- **Phase 1, live monitor:** process table via psutil, refresh timer,
   sort/filter. A mini Process Explorer on its own.
-- **Phase 2 — region view:** select a process → `VirtualQueryEx` map + hex read
+- **Phase 2, region view:** select a process → `VirtualQueryEx` map + hex read
   of a region. Read-only forensic inspection.
-- **Phase 3 — recording:** RegionSampler writes time-series snapshots to SQLite;
+- **Phase 3, recording:** RegionSampler writes time-series snapshots to SQLite;
   a timeline widget.
-- **Phase 4 — playback:** scrub the timeline; UI rebuilds process/region state
+- **Phase 4, playback:** scrub the timeline; UI rebuilds process/region state
   at time T from SQLite.
-- **Phase 5 — the payoff:** EtwCollector feeds thread-tagged `mem_event`s;
+- **Phase 5, the payoff:** EtwCollector feeds thread-tagged `mem_event`s;
   filter playback to one TID.
-- **Phase 6 — heuristic detection:** score each region for in-memory code
+- **Phase 6, heuristic detection:** score each region for in-memory code
   injection (unbacked executable memory, reflective-load PE headers, NOP sleds,
   packing entropy) and surface it in the region view. Structural + content tiers
   ship today; the temporal RW→RX transition detector is the next step. See
@@ -193,7 +193,7 @@ docs/
 
 Alongside the forensic monitor, MemDo has a **Dashboard** tab: a vivid,
 near-live overview built to *select, drill-down, interpret, and export*
-memory data. It is purely **additive** — it reuses the existing collector
+memory data. It is purely **additive**, it reuses the existing collector
 streams rather than introducing a parallel engine, and the forensic monitor
 is untouched.
 
@@ -214,12 +214,12 @@ DashboardView.processActivated(pid,name) ──► MainWindow  ──► switch 
 
 Pieces:
 
-- **`collectors/system.py` — `SystemCollector`**: mirrors `ProcessCollector`
+- **`collectors/system.py`, `SystemCollector`**: mirrors `ProcessCollector`
   (own `QThread`, responsive-sleep loop), emitting a `SystemSample`
   (`model/system.py`) from `virtual_memory()` + `swap_memory()`. This fills the
-  one gap in the existing collectors — system-wide totals.
+  one gap in the existing collectors, system-wide totals.
 - **`analytics.py`** (dependency-free, no numpy): a `SeriesBuffer` ring buffer
-  plus the **interpret** layer — least-squares **leak rate** (bytes/sec →
+  plus the **interpret** layer, least-squares **leak rate** (bytes/sec →
   MB/min), **z-score** anomaly spikes, and a **top-movers** working-set diff.
   It also hosts the **injection-scoring** primitives (`score_region`,
   `shannon_entropy`, …) described in the next section. Fully unit-tested
@@ -227,9 +227,9 @@ Pieces:
 - **`ui/theme.py`**: neon-on-charcoal palette + green→red heat ramp + pyqtgraph
   defaults, scoped to the dashboard via an object-name'd stylesheet so the
   monitor keeps its native look.
-- **`ui/gauges.py` — `AnimatedGauge`**: 270° arc gauge eased by a ~30 fps render
+- **`ui/gauges.py`, `AnimatedGauge`**: 270° arc gauge eased by a ~30 fps render
   timer, decoupled from the 1 Hz data cadence.
-- **`ui/dashboard.py` — `DashboardView`**: composes the gauges, a scrolling
+- **`ui/dashboard.py`, `DashboardView`**: composes the gauges, a scrolling
   pyqtgraph RAM timeline, a heat-ranked top-process bar list (click → drill-in),
   the interpret strip, and CSV/JSON **export** of the current window.
 
@@ -253,7 +253,7 @@ The immediate inspiration is the *NyxWatch* write-up[^nyxwatch], a C++
 proof-of-concept that walks a process's regions and flags `MEM_PRIVATE`
 executable allocations. The same core idea is the basis of the Volatility
 Framework's `malfind` plugin[^malfind] and maps directly onto MITRE ATT&CK
-**T1055 — Process Injection**[^t1055].
+**T1055: Process Injection**[^t1055].
 
 ### The core signal: unbacked executable memory
 
@@ -265,8 +265,8 @@ Windows tags every region (`MEMORY_BASIC_INFORMATION.Type`) as one of:
 | `MEM_MAPPED` | `0x40000` | Backed by a data file / section object |
 | `MEM_PRIVATE`| `0x20000` | Anonymous, dynamically allocated (heap, stacks, `VirtualAlloc`) |
 
-Legitimate executable code almost always lives in `MEM_IMAGE`. Injected code —
-raw shellcode, reflectively-loaded DLLs, hollowed payloads — typically ends up
+Legitimate executable code almost always lives in `MEM_IMAGE`. Injected code
+(raw shellcode, reflectively-loaded DLLs, hollowed payloads) typically ends up
 **executable *and* `MEM_PRIVATE`** ("unbacked" or "floating" code), because it
 was written into memory rather than loaded by the image loader. That single
 combination is the highest-signal heuristic in this space.[^malfind]
@@ -279,7 +279,7 @@ combination is the highest-signal heuristic in this space.[^malfind]
 
 | Tier | Signal | Points | Needs bytes? | Rationale |
 |---|---|---:|:--:|---|
-| **Structural** | Executable `MEM_PRIVATE` | +50 | no | Unbacked executable memory — the core injection tell[^malfind] |
+| **Structural** | Executable `MEM_PRIVATE` | +50 | no | Unbacked executable memory, the core injection tell[^malfind] |
 | Structural | Executable `MEM_MAPPED` | +30 | no | Possible **module stomping** (code written over a mapped file) |
 | Structural | Writable **and** executable (RWX/RWXC) | +25 | no | Self-modifying / stager memory; rare in benign code |
 | **Content** | `MZ` header at offset 0 | +20 | yes | PE image in memory → reflective DLL injection[^t1055] |
@@ -287,17 +287,17 @@ combination is the highest-signal heuristic in this space.[^malfind]
 | Content | Shannon entropy ≥ `ENTROPY_PACKED` = 7.2 bits/byte | +10 | yes | Packed or encrypted payload[^entropy] |
 
 The total is capped at 100. Non-committed or non-executable regions
-short-circuit to score 0. When `head` is empty (no bytes captured — e.g. an
+short-circuit to score 0. When `head` is empty (no bytes captured, e.g. an
 unelevated live target or a pre-feature recording) the content signals are
 skipped and only the structural tier runs.
 
 Supporting helpers, all pure and unit-tested (`tests/test_analytics.py`):
 
-- `is_executable(protect)` — execute bit set and **not** a guard page.
-- `shannon_entropy(data)` — `H = -Σ pᵢ·log₂ pᵢ`, in bits/byte (0.0–8.0).[^entropy]
-- `longest_nop_run(data)` — longest run of `0x90`.
+- `is_executable(protect)`, execute bit set and **not** a guard page.
+- `shannon_entropy(data)`, `H = -Σ pᵢ·log₂ pᵢ`, in bits/byte (0.0–8.0).[^entropy]
+- `longest_nop_run(data)`, longest run of `0x90`.
 
-Suggested triage thresholds (tune against a JIT-heavy baseline — see
+Suggested triage thresholds (tune against a JIT-heavy baseline, see
 Limitations): **≥ 50 = review, ≥ 75 = likely injection.**
 
 ```mermaid
@@ -350,23 +350,23 @@ flowchart TD
     J --> K["Region view: Score column<br/>+ heat background + reason tooltip"]
 ```
 
-**Collection** — `collectors/region.py`. The sampler opens the target with
+**Collection**, `collectors/region.py`. The sampler opens the target with
 `want_read=True` (falling back to map-only if unelevated) and, via
 `RegionSampler._read_heads`, reads the first `HEAD_BYTES` (256) of each region
 that is **executable *and* readable**. Reading only the head of only the
-executable regions keeps the extra `ReadProcessMemory` cost bounded — a handful
+executable regions keeps the extra `ReadProcessMemory` cost bounded, a handful
 of small reads per tick, not a full address-space dump.
 
-**Storage** — `storage/dao.py`. `add_sample(..., heads=None)` inserts region
+**Storage**, `storage/dao.py`. `add_sample(..., heads=None)` inserts region
 rows one at a time so each captured head can be written to `region_blob` with a
 foreign key to its row. `heads_at(recording_id, ts_us)` reads them back for the
 anchored sample (same "latest at or before *T*" semantics as `regions_at`).
 
-**Replay** — `services/playback.py`. `PlaybackEngine.heads(ts_us)` is kept
+**Replay**, `services/playback.py`. `PlaybackEngine.heads(ts_us)` is kept
 separate from `seek()` so the latter's `(state, regions)` tuple contract is
 unchanged.
 
-**Surface** — `ui/region_view.py`. `RegionTableModel` gained a **Score**
+**Surface**, `ui/region_view.py`. `RegionTableModel` gained a **Score**
 column. On `set_regions(rows, heads)` it computes a `RegionVerdict` per row and:
 
 - shows the numeric score (blank for benign rows),
@@ -382,7 +382,7 @@ signals from `region_blob`.
 - All memory reads happen on the **sampler `QThread`**, consistent with the
   project rule that storage/IO stay off the GUI thread.
 - Storage cost: ≤ 256 bytes per *executable* region per tick. Bounded, but on a
-  large process over a long recording it accumulates — a natural future knob is
+  large process over a long recording it accumulates, a natural future knob is
   deduping identical heads or hashing instead of storing raw bytes.
 - Scoring is O(head length) per region and runs on the GUI thread only at
   `set_regions` time (per seek), which is negligible.
@@ -393,11 +393,11 @@ This is a **heuristic triage aid, not a verdict engine.** The same caveats the
 NyxWatch author acknowledges apply here:
 
 1. **JIT false positives.** .NET, the JVM, and JavaScript engines (V8) legally
-   allocate private, executable — sometimes RWX — memory for generated code. A
+   allocate private, executable (sometimes RWX) memory for generated code. A
    naive scan lights them up. Mitigation is an allowlist / behavioural context,
    which is why the thresholds above must be tuned against a JIT-heavy baseline.
 2. **RW→RX flip evasion.** Mature loaders allocate `PAGE_READWRITE`, write the
-   payload, then `VirtualProtect` to `PAGE_EXECUTE_READ` — never holding RWX. A
+   payload, then `VirtualProtect` to `PAGE_EXECUTE_READ`, never holding RWX. A
    single snapshot can miss this. The **temporal** detector below closes it.
 3. **Module stomping into `MEM_IMAGE`.** Overwriting a legitimately-mapped image
    defeats the "private" check; the +30 `MEM_MAPPED` rule only partially covers
@@ -405,7 +405,7 @@ NyxWatch author acknowledges apply here:
 4. **Snapshot/polling model.** `VirtualQueryEx` + `ReadProcessMemory` sampling
    is a point-in-time, racy, user-mode view. A kernel callback or ETW
    Threat-Intelligence source sees the *allocation/protection-change event*
-   itself and is far harder to evade — consistent with this doc's
+   itself and is far harder to evade, consistent with this doc's
    ["hard problem"](#the-hard-problem-stated-honestly) framing.
 
 ### Planned: temporal RW→RX transition detector
@@ -416,16 +416,16 @@ private region transitions **`PAGE_READWRITE` → `PAGE_EXECUTE_READ`**. That is
 the exact "allocate-RW, write payload, flip-to-RX" pattern EDRs watch for, and
 it directly addresses evasion (2) above. The planned entry point is
 `analytics.score_transition(prev_region, curr_region)`, scored over the
-playback timeline — the feature that makes MemDo *exceed* the source technique
+playback timeline, the feature that makes MemDo *exceed* the source technique
 rather than merely reimplement it.
 
 ### References
 
-[^nyxwatch]: *NyxWatch — A Deep Dive into Live Memory Malware Detection (Part I)*,
+[^nyxwatch]: *NyxWatch: A Deep Dive into Live Memory Malware Detection (Part I)*,
     DFIR_rdk, Medium. <https://medium.com/@DFIR_rdk/nyxwatch-a-deep-dive-into-live-memory-malware-detection-part-i-4b33fcfa9fb2>
 [^malfind]: The Volatility Framework's `malfind` plugin detects potentially
     injected code by locating executable, private (non-file-backed) memory
-    regions and inspecting them for PE (`MZ`) headers. Volatility Foundation —
+    regions and inspecting them for PE (`MZ`) headers. Volatility Foundation,
     <https://www.volatilityfoundation.org/>.
 [^t1055]: MITRE ATT&CK, *Process Injection* (T1055), including the *Reflective
     DLL/PE image* variants. <https://attack.mitre.org/techniques/T1055/>.

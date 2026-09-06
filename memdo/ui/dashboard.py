@@ -99,7 +99,7 @@ class ProcessBar(QWidget):
             p.setBrush(QColor(r, g, b))
             p.drawRoundedRect(0, 4, int(w * self._width_frac), h - 8, 5, 5)
         # Labels sit on top of the bright heat fill, so use bold, near-black
-        # text — dark and thick reads cleanly over green/amber/red.
+        # text, dark and thick reads cleanly over green/amber/red.
         font = p.font()
         font.setBold(True)
         p.setFont(font)
@@ -157,7 +157,7 @@ class DashboardView(QWidget):
         gauges_frame.setFixedWidth(320)
         top.addWidget(gauges_frame)
 
-        chart_frame, chart_lay = _panel("RAM Usage — last 10 min")
+        chart_frame, chart_lay = _panel("RAM Usage, last 10 min")
         self.plot = pg.PlotWidget()
         self.plot.setBackground(theme.BG)
         self.plot.showGrid(x=True, y=True, alpha=0.15)
@@ -191,7 +191,7 @@ class DashboardView(QWidget):
         root.addLayout(top, 1)
 
         # middle: top processes
-        proc_frame, proc_lay = _panel(f"Top {TOP_N} Processes — working set")
+        proc_frame, proc_lay = _panel(f"Top {TOP_N} Processes, working set")
         self._bars: list[ProcessBar] = []
         for _ in range(TOP_N):
             bar = ProcessBar()

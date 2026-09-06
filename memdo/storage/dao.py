@@ -99,7 +99,7 @@ class Dao:
         return [RecordingRow(*r) for r in rows]
 
     def sample_times(self, recording_id: int) -> list[int]:
-        """Ordered list of every sample's timestamp — drives the timeline."""
+        """Ordered list of every sample's timestamp, drives the timeline."""
         rows = self.conn.execute(
             "SELECT ts_us FROM process_snapshot WHERE recording_id=? ORDER BY ts_us",
             (recording_id,),

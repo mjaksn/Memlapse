@@ -1,4 +1,4 @@
-"""PlaybackEngine — reads a recording back for scrubbing.
+"""PlaybackEngine, reads a recording back for scrubbing.
 
 Holds a read-only Dao on the UI thread (a separate SQLite connection from the
 sampler's; WAL makes concurrent read+write safe). Given a target time it

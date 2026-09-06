@@ -1,4 +1,4 @@
-"""RegionSampler — records a process's memory map over time.
+"""RegionSampler, records a process's memory map over time.
 
 Runs on its own QThread. Each tick it captures process-wide stats (working
 set, private bytes, thread count) plus the full VirtualQueryEx region map, and
@@ -35,9 +35,9 @@ class RegionSampler(QThread):
 
     #: recording_id, once the recording row exists.
     started = Signal(int)
-    #: ts_us (64-bit epoch microseconds), region_count — after each sample.
+    #: ts_us (64-bit epoch microseconds), region_count, after each sample.
     sampled = Signal("qlonglong", int)
-    #: reason string — emitted when sampling stops (user stop or target exit).
+    #: reason string, emitted when sampling stops (user stop or target exit).
     finished_recording = Signal(str)
 
     def __init__(self, pid: int, name: str, interval: float,

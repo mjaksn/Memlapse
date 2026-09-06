@@ -54,7 +54,7 @@ def linreg_slope(xs: Sequence[float], ys: Sequence[float]) -> float:
     """Least-squares slope ``dy/dx``.
 
     Returns 0.0 for fewer than two points, mismatched lengths, or when ``xs``
-    has no spread (vertical — undefined slope).
+    has no spread (vertical, undefined slope).
     """
     n = len(xs)
     if n < 2 or n != len(ys):
@@ -225,7 +225,7 @@ def score_region(region: Region, *, head: bytes = b"") -> RegionVerdict:
     # Content: only meaningful when the region's head was actually read.
     if head[:2] == b"MZ":
         score += 20
-        reasons.append("PE header (MZ) in memory — reflective DLL")
+        reasons.append("PE header (MZ) in memory, reflective DLL")
     if longest_nop_run(head) >= NOP_SLED_MIN:
         score += 10
         reasons.append("NOP sled")

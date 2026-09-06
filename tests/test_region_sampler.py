@@ -1,7 +1,7 @@
 """Tests for the RegionSampler recording collector.
 
 run() is invoked directly (not via start()) so it executes synchronously on the
-test thread — a slot on ``sampled`` stops it after the first sample, making the
+test thread, a slot on ``sampled`` stops it after the first sample, making the
 loop deterministic without real threading.
 """
 

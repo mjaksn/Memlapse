@@ -1,19 +1,19 @@
 # MemDo
 
-A Windows memory forensics tool — Process Explorer / System Informer-style
+A Windows memory forensics tool, Process Explorer / System Informer-style
 monitoring, with recording and playback of the memory activity of specific
 threads. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Status
 
-- **Phase 1** — live process monitor (sortable, filterable table).
-- **Phase 2** — memory-map view: select a process to see its VirtualQueryEx
+- **Phase 1**, live process monitor (sortable, filterable table).
+- **Phase 2**, memory-map view: select a process to see its VirtualQueryEx
   region map, click a region for a hex preview of its bytes.
-- **Phase 3** — record a process's memory map over time to SQLite, then scrub
+- **Phase 3**, record a process's memory map over time to SQLite, then scrub
   the recording with the timeline to replay how its regions and footprint
   evolved.
 
-- **Dashboard** — a vivid, near-live overview tab: system RAM/swap gauges, a
+- **Dashboard**, a vivid, near-live overview tab: system RAM/swap gauges, a
   scrolling usage timeline, a heat-ranked top-process list (click to drill into
   the monitor), leak/anomaly interpretation, and CSV/JSON export of the window.
 

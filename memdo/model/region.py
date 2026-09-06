@@ -1,6 +1,6 @@
 """Virtual memory region model and Win32 constant decoding.
 
-A Region is one entry from VirtualQueryEx — a run of pages sharing the same
+A Region is one entry from VirtualQueryEx, a run of pages sharing the same
 state, protection, and type. Constants are decoded to short human labels for
 display and stored as raw integers in SQLite.
 """

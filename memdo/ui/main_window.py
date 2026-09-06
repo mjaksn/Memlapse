@@ -2,9 +2,9 @@
 
 Two modes:
 
-* **Live** — the ProcessCollector streams the process list; selecting a process
+* **Live**, the ProcessCollector streams the process list; selecting a process
   shows its live memory map (region view reads bytes on demand).
-* **Playback** — a recording is opened; the timeline scrubber drives the region
+* **Playback**, a recording is opened; the timeline scrubber drives the region
   view from stored samples (no live reads).
 
 Recording is available in live mode: pick a process, hit Record, and a
@@ -43,7 +43,7 @@ def _fmt_bytes(n: int) -> str:
 class MainWindow(QMainWindow):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("MemDo — Memory Monitor")
+        self.setWindowTitle("MemDo: Memory Monitor")
         self.resize(1100, 700)
 
         self._mode = "live"          # "live" | "playback"
@@ -181,7 +181,7 @@ class MainWindow(QMainWindow):
         )
 
     def _on_sampled(self, ts_us: int, region_count: int) -> None:
-        self._status_label.setText(f"recording — {region_count} regions @ last sample")
+        self._status_label.setText(f"recording, {region_count} regions @ last sample")
 
     def _on_recording_stopped(self, reason: str) -> None:
         self.record_action.setText("● Record")
@@ -202,7 +202,7 @@ class MainWindow(QMainWindow):
         for rec in recordings:
             started = time.strftime("%Y-%m-%d %H:%M:%S",
                                     time.localtime(rec.started_utc / 1_000_000))
-            label = f"#{rec.id}  {rec.target_name} ({rec.target_pid})  —  {started}"
+            label = f"#{rec.id}  {rec.target_name} ({rec.target_pid}),  {started}"
             self._recordings_menu.addAction(label).triggered.connect(
                 lambda _=False, rid=rec.id: self._open_recording(rid)
             )
@@ -223,7 +223,7 @@ class MainWindow(QMainWindow):
         if not times:
             self.region_view.show_recorded_regions([], "Recording has no samples.")
         self.statusBar().showMessage(
-            f"Playback — recording #{recording_id}, {len(times)} samples"
+            f"Playback: recording #{recording_id}, {len(times)} samples"
         )
 
     def _on_seek(self, ts_us: int) -> None:
@@ -233,7 +233,7 @@ class MainWindow(QMainWindow):
         heads = self.playback.heads(ts_us)
         if state is not None:
             header = (
-                f"Recording #{self.playback.recording_id} — PID {state.pid} — "
+                f"Recording #{self.playback.recording_id}, PID {state.pid}, "
                 f"{len(regions)} regions | WS {_fmt_bytes(state.wset_bytes)} | "
                 f"Priv {_fmt_bytes(state.priv_bytes)} | {state.thread_count} threads"
             )
@@ -241,7 +241,7 @@ class MainWindow(QMainWindow):
                 f"WS {_fmt_bytes(state.wset_bytes)}  |  {state.thread_count} threads"
             )
         else:
-            header = f"Recording #{self.playback.recording_id} — no data at this time"
+            header = f"Recording #{self.playback.recording_id}, no data at this time"
         self.region_view.show_recorded_regions(regions, header, heads)
 
     # --- shutdown ---------------------------------------------------------

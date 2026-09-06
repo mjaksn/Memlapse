@@ -149,6 +149,6 @@ class ProcessView(QWidget):
         src = self.proxy.mapToSource(current)
         proc = self.model.process_at(src.row())
         if proc is None or proc.pid == self._selected_pid:
-            return  # same process (e.g. re-selection after a poll) — don't re-emit
+            return  # same process (e.g. re-selection after a poll), don't re-emit
         self._selected_pid = proc.pid
         self.processSelected.emit(proc.pid, proc.name)

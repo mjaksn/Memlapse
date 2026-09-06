@@ -1,4 +1,4 @@
-"""RecordingManager — owns the active RegionSampler and its lifecycle.
+"""RecordingManager, owns the active RegionSampler and its lifecycle.
 
 A thin coordinator so the UI doesn't manage QThread details directly. Re-emits
 the sampler's signals and guarantees only one recording runs at a time.
