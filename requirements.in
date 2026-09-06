@@ -1,0 +1,6 @@
+# Direct runtime dependencies, pinned exactly. requirements.txt is the
+# hash-locked file pip installs from; regenerate it with:
+#   uv pip compile --generate-hashes --universal requirements.in -o requirements.txt
+PySide6==6.11.2
+psutil==7.2.2
+pyqtgraph==0.14.0

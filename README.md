@@ -39,3 +39,14 @@ python main.py --elevate  # relaunch elevated to read system and other users' pr
 
 Running elevated enables `SeDebugPrivilege`, required to read most system and
 other-user processes. The status bar shows the current privilege state.
+
+## Test
+
+```powershell
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+Dependencies are pinned by version and hash. The `.in` files list the direct
+dependencies; regenerate the lock files with the `uv pip compile` command noted
+at the top of each.
