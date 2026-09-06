@@ -8,3 +8,8 @@ coverage.xml
 *.db
 *.db-wal
 *.db-shm
+
+# PyCharm project files. Machine specific: the module file names an
+# interpreter that means nothing on another machine, and workspace.xml is
+# editor layout that changes every session.
+.idea/
