@@ -74,11 +74,17 @@ def test_region_model_content_score_with_heads(rmodel):
     assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == "70"  # 50 + 20 (MZ)
 
 
-def test_on_region_selected_invalid_clears_hex(view, sample_regions, monkeypatch):
+def _wait_regions(qtbot, view, count):
+    """Live enumeration is async; wait for the queued result to land."""
+    qtbot.waitUntil(lambda: view.model.rowCount() == count)
+
+
+def test_on_region_selected_invalid_clears_hex(qtbot, view, sample_regions, monkeypatch):
     from PySide6.QtCore import QModelIndex
     monkeypatch.setattr(region_view_mod, "ProcessMemory",
                         _fake_pm_class(sample_regions, read_bytes=b"QQ"))
     view.show_live_process(1, "p")
+    _wait_regions(qtbot, view, 2)
     view.table.selectRow(0)
     assert view.hex.toPlainText() != ""
     view._on_region_selected(QModelIndex(), QModelIndex())  # region None -> clear
@@ -109,52 +115,94 @@ def view(qtbot):
     return v
 
 
-def test_show_live_process_lists_regions(view, sample_regions, monkeypatch):
+def test_show_live_process_lists_regions(qtbot, view, sample_regions, monkeypatch):
     monkeypatch.setattr(region_view_mod, "ProcessMemory",
                         _fake_pm_class(sample_regions))
     view.show_live_process(1234, "proc.exe")
-    assert view.model.rowCount() == 2
+    _wait_regions(qtbot, view, 2)
     assert "2 regions" in view.header.text()
     assert "no read access" not in view.header.text()
 
 
-def test_show_live_process_map_only(view, sample_regions, monkeypatch):
+def test_show_live_process_map_only(qtbot, view, sample_regions, monkeypatch):
     monkeypatch.setattr(region_view_mod, "ProcessMemory",
                         _fake_pm_class(sample_regions, readable=False))
     view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
     assert "no read access" in view.header.text()
 
 
-def test_show_live_process_access_error(view, monkeypatch):
+def test_show_live_process_access_error(qtbot, view, monkeypatch):
     class Boom:
         def __init__(self, *a, **k):
             raise ProcessAccessError("denied")
     monkeypatch.setattr(region_view_mod, "ProcessMemory", Boom)
     view.show_live_process(1234, "proc.exe")
+    qtbot.waitUntil(lambda: "cannot open" in view.header.text())
     assert view.model.rowCount() == 0
-    assert "cannot open" in view.header.text()
 
 
-def test_selecting_readable_region_shows_hexdump(view, sample_regions, monkeypatch):
+def test_stale_load_result_is_ignored(qtbot, view, sample_regions, monkeypatch):
+    """A late enumeration for a superseded selection must not overwrite the view."""
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions))
+    view.show_live_process(1234, "proc.exe")
+    stale_req = view._load_seq
+    _wait_regions(qtbot, view, 2)
+    # Simulate the first (now stale) load arriving after a newer selection.
+    view.show_live_process(5678, "other.exe")  # bumps _load_seq
+    view._on_regions_loaded(stale_req, [], True)
+    assert "other.exe" in view.header.text()  # header reflects the newest request
+
+
+def test_stale_failed_result_is_ignored(qtbot, view, sample_regions, monkeypatch):
+    """A late failure for a superseded selection must not touch the view."""
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions))
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    header = view.header.text()
+    view._on_regions_failed(view._load_seq - 1, "late error")  # stale req id
+    assert view.header.text() == header
+    assert view.model.rowCount() == 2
+
+
+def test_region_load_task_reports_unexpected_error(qapp, monkeypatch):
+    """The worker turns any unexpected error into a failed signal, not a crash."""
+    class Boom:
+        def __init__(self, *a, **k):
+            raise ValueError("kaboom")
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", Boom)
+    task = region_view_mod._RegionLoadTask(7, 1234)
+    captured = []
+    task.signals.failed.connect(lambda rid, msg: captured.append((rid, msg)))
+    task.run()
+    assert captured == [(7, "kaboom")]
+
+
+def test_selecting_readable_region_shows_hexdump(qtbot, view, sample_regions, monkeypatch):
     monkeypatch.setattr(region_view_mod, "ProcessMemory",
                         _fake_pm_class(sample_regions, read_bytes=b"ABCD"))
     view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
     view.table.selectRow(0)  # readable region
     assert "ABCD" in view.hex.toPlainText()
 
 
-def test_selecting_unreadable_region_notes_it(view, sample_regions, monkeypatch):
+def test_selecting_unreadable_region_notes_it(qtbot, view, sample_regions, monkeypatch):
     monkeypatch.setattr(region_view_mod, "ProcessMemory",
                         _fake_pm_class(sample_regions))
     view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
     view.table.selectRow(1)  # PAGE_NOACCESS region
     assert "not readable" in view.hex.toPlainText()
 
 
-def test_selection_read_failure(view, sample_regions, monkeypatch):
+def test_selection_read_failure(qtbot, view, sample_regions, monkeypatch):
     monkeypatch.setattr(region_view_mod, "ProcessMemory",
                         _fake_pm_class(sample_regions))
     view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
 
     class Boom:
         def __init__(self, *a, **k):
@@ -174,10 +222,11 @@ def test_playback_mode_regions_and_no_hex(view, sample_regions):
     assert "not captured" in view.hex.toPlainText()
 
 
-def test_clearing_regions_clears_hex(view, sample_regions, monkeypatch):
+def test_clearing_regions_clears_hex(qtbot, view, sample_regions, monkeypatch):
     monkeypatch.setattr(region_view_mod, "ProcessMemory",
                         _fake_pm_class(sample_regions, read_bytes=b"XY"))
     view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
     view.table.selectRow(0)
     assert view.hex.toPlainText() != ""
     # Emptying the model deselects -> hex is cleared.

@@ -8,7 +8,9 @@ hex panel explains they weren't captured).
 
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtCore import (
+    QAbstractTableModel, QModelIndex, QObject, QRunnable, Qt, QThreadPool, Signal,
+)
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QLabel, QPlainTextEdit, QSplitter, QTableView, QVBoxLayout, QWidget,
@@ -22,6 +24,43 @@ from .theme import heat_color
 
 #: How many bytes to read for the hex preview of a selected region.
 HEX_PREVIEW_BYTES = 512
+
+
+class _RegionLoadSignals(QObject):
+    """Signals for :class:`_RegionLoadTask` (QRunnable can't carry its own)."""
+
+    #: req_id, regions (list[Region]), readable
+    loaded = Signal(int, object, bool)
+    #: req_id, error message
+    failed = Signal(int, str)
+
+
+class _RegionLoadTask(QRunnable):
+    """Enumerate one process's region map off the GUI thread.
+
+    VirtualQueryEx walks the whole address space, which for a busy process is
+    tens of thousands of syscalls, long enough to freeze the window if done on
+    the GUI thread. Running it in the thread pool keeps the UI responsive; the
+    result is handed back over a queued signal.
+    """
+
+    def __init__(self, req_id: int, pid: int) -> None:
+        super().__init__()
+        self._req_id = req_id
+        self._pid = pid
+        self.signals = _RegionLoadSignals()
+
+    def run(self) -> None:  # executed on a pool thread
+        try:
+            with ProcessMemory(self._pid) as pm:
+                regions = pm.regions()
+                readable = pm.can_read
+        except ProcessAccessError as exc:
+            self.signals.failed.emit(self._req_id, str(exc))
+        except Exception as exc:  # never let a pool thread die silently
+            self.signals.failed.emit(self._req_id, str(exc))
+        else:
+            self.signals.loaded.emit(self._req_id, regions, readable)
 
 
 def _fmt_size(n: int) -> str:
@@ -94,6 +133,15 @@ class RegionView(QWidget):
         super().__init__(parent)
         self._pid: int | None = None
         self._live = True  # live -> can read bytes; playback -> cannot
+        self._readable = False
+
+        # Live region maps are enumerated off the GUI thread. Each request gets
+        # a monotonic id; only the newest one's result is applied, so rapidly
+        # clicking through processes (or switching to playback) can't be clobbered
+        # by a slow enumeration that finished late.
+        self._pool = QThreadPool.globalInstance()
+        self._load_seq = 0
+        self._pending: tuple[int, str] | None = None
 
         self.header = QLabel("Select a process to inspect its memory map.", self)
         self.header.setWordWrap(True)
@@ -132,25 +180,43 @@ class RegionView(QWidget):
         self._pid = pid
         self._live = True
         self.hex.clear()
-        try:
-            with ProcessMemory(pid) as pm:
-                regions = pm.regions()
-                self._readable = pm.can_read
-        except ProcessAccessError as exc:
-            self.model.set_regions([])
-            self.header.setText(f"{name} ({pid}) — cannot open: {exc}")
-            return
+        # Clear the previous map at once and enumerate the new one in the
+        # background so the GUI thread never blocks on VirtualQueryEx.
+        self.model.set_regions([])
+        self._load_seq += 1
+        self._pending = (pid, name)
+        self.header.setText(f"{name} ({pid}): reading memory map…")
+        task = _RegionLoadTask(self._load_seq, pid)
+        task.signals.loaded.connect(self._on_regions_loaded)
+        task.signals.failed.connect(self._on_regions_failed)
+        self._pool.start(task)
+
+    def _on_regions_loaded(self, req_id: int, regions: list[Region],
+                           readable: bool) -> None:
+        if req_id != self._load_seq or self._pending is None:
+            return  # a newer selection (or a mode switch) superseded this load
+        pid, name = self._pending
+        self._readable = readable
         self.model.set_regions(regions)
-        note = "" if self._readable else "  (no read access — map only)"
-        self.header.setText(
-            f"{name} ({pid}) — {len(regions)} regions{note}"
-        )
+        note = "" if readable else "  (no read access, map only)"
+        self.header.setText(f"{name} ({pid}): {len(regions)} regions{note}")
+
+    def _on_regions_failed(self, req_id: int, message: str) -> None:
+        if req_id != self._load_seq or self._pending is None:
+            return
+        pid, name = self._pending
+        self.model.set_regions([])
+        self.header.setText(f"{name} ({pid}), cannot open: {message}")
 
     # --- playback mode: region map from storage, no live reads -------------
     def show_recorded_regions(self, regions: list[Region], header: str,
                               heads: dict[int, bytes] | None = None) -> None:
         self._pid = None
         self._live = False
+        # Invalidate any in-flight live enumeration so it can't overwrite the
+        # recorded map when it finishes.
+        self._load_seq += 1
+        self._pending = None
         self.model.set_regions(regions, heads)
         self.header.setText(header)
         self.hex.setPlainText("(memory contents not captured in this recording)")
@@ -169,7 +235,7 @@ class RegionView(QWidget):
         if not region.is_readable:
             self.hex.setPlainText(
                 f"0x{region.base_addr:012x}  {region.state_str}/{region.protect_str}"
-                f" — not readable"
+                f", not readable"
             )
             return
         try:
