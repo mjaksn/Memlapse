@@ -1,56 +1,75 @@
 """Tests for the live process collector."""
 
-from types import SimpleNamespace
-
 import psutil
 
 import memdo.collectors.process as proc_mod
 from memdo.collectors.process import ProcessCollector
+from memdo.win32.processes import SystemProcess
 
 
-class FakeProc:
-    def __init__(self, info):
-        self._info = info
-
-    @property
-    def info(self):
-        if self._info is None:
-            raise psutil.AccessDenied(pid=1)
-        return self._info
+def _sp(pid, name="p.exe", threads=3, wset=100, private=50, created=1):
+    return SystemProcess(pid=pid, name=name, num_threads=threads,
+                         wset_bytes=wset, private_bytes=private,
+                         create_time=created)
 
 
-def _patch_iter(monkeypatch, procs):
-    monkeypatch.setattr(proc_mod.psutil, "process_iter", lambda attrs=None: procs)
+class FakePsProcess:
+    """Stand-in for psutil.Process: records lookups, can deny access."""
+
+    calls: list[int] = []
+    denied: set[int] = set()
+
+    def __init__(self, pid):
+        self.pid = pid
+        FakePsProcess.calls.append(pid)
+
+    def username(self):
+        if self.pid in FakePsProcess.denied:
+            raise psutil.AccessDenied(pid=self.pid)
+        return f"DOMAIN\\user{self.pid}"
 
 
-def test_poll_maps_fields(monkeypatch):
-    minfo = SimpleNamespace(wset=100, private=50, rss=1, vms=2)
-    _patch_iter(monkeypatch, [FakeProc({
-        "pid": 7, "name": "p.exe", "username": "DOMAIN\\bob",
-        "num_threads": 3, "memory_info": minfo})])
-    rows = ProcessCollector._poll()
+def _patch(monkeypatch, procs):
+    FakePsProcess.calls = []
+    FakePsProcess.denied = set()
+    monkeypatch.setattr(proc_mod, "list_processes", lambda: procs)
+    monkeypatch.setattr(proc_mod.psutil, "Process", FakePsProcess)
+
+
+def test_poll_maps_fields(qapp, monkeypatch):
+    _patch(monkeypatch, [_sp(7, "p.exe", threads=3, wset=100, private=50)])
+    rows = ProcessCollector()._poll()
     assert len(rows) == 1
     r = rows[0]
-    assert r.pid == 7 and r.wset_bytes == 100 and r.private_bytes == 50
-    assert r.username == "bob"  # domain prefix stripped
+    assert r.pid == 7 and r.name == "p.exe" and r.num_threads == 3
+    assert r.wset_bytes == 100 and r.private_bytes == 50
+    assert r.username == "user7"  # domain prefix stripped
 
 
-def test_poll_falls_back_to_rss_vms(monkeypatch):
-    minfo = SimpleNamespace(rss=11, vms=22)  # no wset/private
-    _patch_iter(monkeypatch, [FakeProc({
-        "pid": 1, "name": None, "username": None,
-        "num_threads": None, "memory_info": minfo})])
-    r = ProcessCollector._poll()[0]
-    assert r.wset_bytes == 11 and r.private_bytes == 22
-    assert r.name == "?" and r.username == "" and r.num_threads == 0
+def test_poll_unnamed_process_shows_placeholder(qapp, monkeypatch):
+    _patch(monkeypatch, [_sp(1, name="")])
+    assert ProcessCollector()._poll()[0].name == "?"
 
 
-def test_poll_skips_inaccessible(monkeypatch):
-    good = FakeProc({"pid": 1, "name": "ok", "username": "u",
-                     "num_threads": 1, "memory_info": SimpleNamespace(wset=1, private=1)})
-    _patch_iter(monkeypatch, [FakeProc(None), good])  # first raises AccessDenied
-    rows = ProcessCollector._poll()
-    assert [r.pid for r in rows] == [1]
+def test_poll_denied_username_is_empty(qapp, monkeypatch):
+    _patch(monkeypatch, [_sp(1)])
+    FakePsProcess.denied = {1}
+    assert ProcessCollector()._poll()[0].username == ""
+
+
+def test_username_cached_per_process_instance(qapp, monkeypatch):
+    _patch(monkeypatch, [_sp(1, created=10), _sp(2, created=20)])
+    c = ProcessCollector()
+    c._poll()
+    c._poll()
+    assert FakePsProcess.calls == [1, 2]  # second poll served from the cache
+
+    # pid 1 is reused by a new process (different creation time): re-queried.
+    # pid 2 exited: its cache entry is dropped.
+    monkeypatch.setattr(proc_mod, "list_processes", lambda: [_sp(1, created=11)])
+    c._poll()
+    assert FakePsProcess.calls == [1, 2, 1]
+    assert set(c._usernames) == {(1, 11)}
 
 
 def test_run_loop_emits_and_stops(qtbot, monkeypatch):

@@ -34,7 +34,7 @@ python -m venv .venv
 pip install -r requirements.txt
 
 python main.py            # live monitor
-python main.py --elevate  # relaunch elevated for the full process list
+python main.py --elevate  # relaunch elevated to read system and other users' processes
 ```
 
 Running elevated enables `SeDebugPrivilege`, required to read most system and

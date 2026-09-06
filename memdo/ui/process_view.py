@@ -36,6 +36,13 @@ class ProcessTableModel(QAbstractTableModel):
         super().__init__(parent)
         self._rows: list[ProcessInfo] = []
         self._max_ws: int = 0
+        # Per-row display strings, sort keys and heat colours are computed
+        # once per snapshot in set_processes(). data() is called thousands of
+        # times per refresh (sorting, filtering, painting), each a callback
+        # from C++ into Python, so it must be a plain lookup.
+        self._display: list[tuple] = []
+        self._sort: list[tuple] = []
+        self._heat: list[tuple[int, int, int]] = []
 
     # --- required overrides ------------------------------------------------
     def rowCount(self, parent=QModelIndex()) -> int:
@@ -52,28 +59,21 @@ class ProcessTableModel(QAbstractTableModel):
     def data(self, index: QModelIndex, role=Qt.DisplayRole):
         if not index.isValid():
             return None
-        p = self._rows[index.row()]
-        col = index.column()
+        row, col = index.row(), index.column()
 
         if role == Qt.DisplayRole:
-            return (
-                p.pid, p.name, p.username, p.num_threads,
-                _fmt_bytes(p.wset_bytes), _fmt_bytes(p.private_bytes),
-            )[col]
+            return self._display[row][col]
 
         # Sort numerically on the numeric columns instead of by display string.
         if role == Qt.UserRole:
-            return (
-                p.pid, p.name.lower(), p.username.lower(), p.num_threads,
-                p.wset_bytes, p.private_bytes,
-            )[col]
+            return self._sort[row][col]
 
         if role == Qt.TextAlignmentRole and col in (0, 3, 4, 5):
             return int(Qt.AlignRight | Qt.AlignVCenter)
 
         # Heat the Working Set cell relative to the busiest process in view.
         if role == Qt.BackgroundRole and col == 4 and self._max_ws > 0:
-            r, g, b = heat_color(p.wset_bytes / self._max_ws)
+            r, g, b = self._heat[row]
             return QBrush(QColor(r, g, b, 90))
         return None
 
@@ -81,7 +81,20 @@ class ProcessTableModel(QAbstractTableModel):
     def set_processes(self, rows: list[ProcessInfo]) -> None:
         self.beginResetModel()
         self._rows = rows
-        self._max_ws = max((r.wset_bytes for r in rows), default=0)
+        self._max_ws = max_ws = max((r.wset_bytes for r in rows), default=0)
+        self._display = [
+            (p.pid, p.name, p.username, p.num_threads,
+             _fmt_bytes(p.wset_bytes), _fmt_bytes(p.private_bytes))
+            for p in rows
+        ]
+        self._sort = [
+            (p.pid, p.name.lower(), p.username.lower(), p.num_threads,
+             p.wset_bytes, p.private_bytes)
+            for p in rows
+        ]
+        self._heat = (
+            [heat_color(p.wset_bytes / max_ws) for p in rows] if max_ws else []
+        )
         self.endResetModel()
 
     def process_at(self, row: int) -> ProcessInfo | None:
@@ -95,6 +108,7 @@ class ProcessView(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._selected_pid: int | None = None
+        self._columns_sized = False
 
         self.model = ProcessTableModel(self)
         self.proxy = QSortFilterProxyModel(self)
@@ -129,7 +143,12 @@ class ProcessView(QWidget):
 
     def update_processes(self, rows: list[ProcessInfo]) -> None:
         self.model.set_processes(rows)
-        self.table.resizeColumnsToContents()
+        if rows and not self._columns_sized:
+            # Size the columns from real content once. Doing it on every poll
+            # costs a delegate size hint for every cell of every row and
+            # fights any widths the user has dragged.
+            self.table.resizeColumnsToContents()
+            self._columns_sized = True
         # A full model reset clears the selection; restore it by pid so the
         # region view stays put (and, via the pid guard, doesn't re-enumerate).
         if self._selected_pid is not None:

@@ -19,7 +19,7 @@ Design constraints:
 |---|---|---|
 | GUI | **PySide6 (Qt)** | The only Python GUI that comfortably does a live-updating process tree, dockable panels, hex views, and timelines. Process Explorer's whole shape maps onto Qt's model/view. LGPL, fine for personal use. |
 | Live plots/timeline | **pyqtgraph** | Built for real-time streaming data inside Qt. matplotlib will choke on live memory graphs; pyqtgraph won't. |
-| Process enumeration + coarse stats | **psutil** | Gives PIDs, threads, working set, RSS, handles without touching raw Win32. |
+| Process enumeration + coarse stats | **`NtQuerySystemInformation`** via ctypes, with **psutil** for user names and system-wide totals | One syscall lists every process with its thread count and memory counters. Asking psutil per process opens a handle (or scans the whole table) for each one, which cost about a second per poll and starved the GUI thread of the GIL. |
 | Raw memory access | **ctypes** (or pywin32) over Win32 | `OpenProcess`, `VirtualQueryEx`, `ReadProcessMemory`, `EnumProcessModules`. ctypes keeps deps minimal. |
 | Thread-level memory *activity* | **ETW** via `pywintrace` | The crux of the forensic feature, see "The hard problem" below. |
 | Storage | **SQLite** (stdlib `sqlite3`) | Time-series snapshots + event log. WAL mode for concurrent write-while-read. |
@@ -78,7 +78,7 @@ baseline** and **2 (ETW) is the forensic engine**, with 3 left as a pluggable
                 │
 ┌───────────────┴──────────────┬──────────────┐
 │  Collectors (background)      │  Storage      │
-│  • ProcessCollector (psutil)  │  • SQLite     │
+│  • ProcessCollector (NtQSI)   │  • SQLite     │
 │  • RegionSampler (VirtualQ.)  │    (WAL)      │
 │  • EtwCollector (pywintrace)  │  • schema/DAO │
 │    → thread-tagged events     │  • migrations │
@@ -91,6 +91,21 @@ baseline** and **2 (ETW) is the forensic engine**, with 3 left as a pluggable
 `QThread`s (or a separate process for ETW, which is chatty), and push data to
 the UI via Qt signals, never touch widgets from a worker thread. Storage
 writes happen on the collector side so the UI thread stays smooth.
+
+Two more rules keep the GUI thread responsive, both learned the hard way:
+
+- **Latest-only delivery.** Queued signals have no backpressure, so a poller
+  that emits faster than the GUI consumes builds an unbounded backlog and the
+  window eventually freezes. `collectors/base.py` only emits a snapshot once
+  the previous one has been dequeued on the GUI thread and drops the poll
+  otherwise (`skipped` counts them).
+- **Keep the GIL free while the GUI works.** Qt's model/view calls back into
+  Python thousands of times per refresh (`data()` for sorting, filtering and
+  painting), and each callback must take the GIL. A collector that spends most
+  of each second in Python-level work makes every one of those callbacks
+  wait, which is why the process collector uses one GIL-free syscall instead
+  of psutil per process, and why the process model precomputes its display
+  strings and sizes its columns only once.
 
 ---
 
@@ -125,8 +140,9 @@ Each phase is usable on its own.
 - **Phase 0, skeleton:** PySide6 window, `requirements.txt`, package layout
   (`memdo/ui`, `memdo/collectors`, `memdo/storage`, `memdo/model`),
   SeDebugPrivilege helper, "am I elevated?" check.
-- **Phase 1, live monitor:** process table via psutil, refresh timer,
-  sort/filter. A mini Process Explorer on its own.
+- **Phase 1, live monitor:** process table from a bulk
+  `NtQuerySystemInformation` query, refresh timer, sort/filter. A mini
+  Process Explorer on its own.
 - **Phase 2, region view:** select a process → `VirtualQueryEx` map + hex read
   of a region. Read-only forensic inspection.
 - **Phase 3, recording:** RegionSampler writes time-series snapshots to SQLite;
@@ -162,8 +178,8 @@ memdo/
   app.py                 # entry point: elevation check, launch Qt app
   model/                 # dataclasses: ProcessInfo, Region, MemEvent, ...
   collectors/
-    base.py              # Collector ABC + QThread plumbing
-    process.py           # psutil-backed ProcessCollector
+    base.py              # PollingCollector: QThread loop, latest-only delivery
+    process.py           # ProcessCollector over win32/processes.py
     region.py            # VirtualQueryEx RegionSampler
     etw.py               # pywintrace EtwCollector (Phase 5)
   storage/
@@ -182,6 +198,7 @@ memdo/
   win32/
     privileges.py        # SeDebugPrivilege, elevation
     memory.py            # ctypes wrappers: OpenProcess, VirtualQueryEx, ...
+    processes.py         # ctypes wrapper: NtQuerySystemInformation process table
 tests/
 docs/
   ARCHITECTURE.md
@@ -214,8 +231,9 @@ DashboardView.processActivated(pid,name) ──► MainWindow  ──► switch 
 
 Pieces:
 
-- **`collectors/system.py`, `SystemCollector`**: mirrors `ProcessCollector`
-  (own `QThread`, responsive-sleep loop), emitting a `SystemSample`
+- **`collectors/system.py`, `SystemCollector`**: shares `ProcessCollector`'s
+  polling loop (`collectors/base.py`: own `QThread`, responsive sleep,
+  latest-only delivery), emitting a `SystemSample`
   (`model/system.py`) from `virtual_memory()` + `swap_memory()`. This fills the
   one gap in the existing collectors, system-wide totals.
 - **`analytics.py`** (dependency-free, no numpy): a `SeriesBuffer` ring buffer

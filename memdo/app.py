@@ -1,8 +1,9 @@
 """Application entry point.
 
-Enables SeDebugPrivilege (best effort), then launches the Qt app. Running
-elevated is optional for the live monitor but unlocks the full process list;
-pass --elevate to relaunch through UAC.
+Enables SeDebugPrivilege (best effort), then launches the Qt app. The process
+list is complete either way; running elevated is what allows opening system
+and other users' processes for memory maps and reads. Pass --elevate to
+relaunch through UAC.
 """
 
 from __future__ import annotations

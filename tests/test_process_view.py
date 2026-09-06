@@ -87,6 +87,28 @@ def test_selection_emits_once_per_pid(view, make_process, qtbot):
     assert emitted[1][0] != first_pid
 
 
+def test_columns_autosized_once_from_first_snapshot(view, make_process, monkeypatch):
+    calls = []
+    monkeypatch.setattr(view.table, "resizeColumnsToContents",
+                        lambda: calls.append(1))
+    view.update_processes([])            # nothing to measure yet
+    assert calls == []
+    view.update_processes([make_process(pid=1)])
+    assert len(calls) == 1
+    view.update_processes([make_process(pid=1), make_process(pid=2)])
+    assert len(calls) == 1               # later polls leave widths alone
+
+
+def test_model_heat_background_only_on_working_set(model, make_process):
+    from PySide6.QtGui import QBrush
+    model.set_processes([make_process(pid=1, wset_bytes=100),
+                         make_process(pid=2, wset_bytes=50)])
+    assert isinstance(model.data(model.index(0, 4), Qt.BackgroundRole), QBrush)
+    assert model.data(model.index(0, 1), Qt.BackgroundRole) is None
+    model.set_processes([make_process(pid=3, wset_bytes=0)])
+    assert model.data(model.index(0, 4), Qt.BackgroundRole) is None
+
+
 def test_select_pid_programmatically(view, make_process):
     view.update_processes([make_process(pid=1, name="a.exe"),
                            make_process(pid=2, name="b.exe")])
