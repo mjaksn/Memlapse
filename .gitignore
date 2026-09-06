@@ -13,3 +13,8 @@ coverage.xml
 # interpreter that means nothing on another machine, and workspace.xml is
 # editor layout that changes every session.
 .idea/
+
+# Agent worktrees. A worktree is a checkout of this repository living
+# inside it, which git records as a gitlink pointing at a commit no clone
+# can resolve. One was committed here by accident and has been removed.
+.claude/worktrees/
