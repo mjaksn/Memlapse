@@ -52,3 +52,7 @@ python -m pytest
 Dependencies are pinned by version and hash. The `.in` files list the direct
 dependencies; regenerate the lock files with the `uv pip compile` command noted
 at the top of each.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
