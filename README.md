@@ -2,7 +2,9 @@
 
 A Windows memory forensics tool, Process Explorer / System Informer-style
 monitoring, with recording and playback of the memory activity of specific
-threads. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+threads. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and
+[docs/RESEARCH_NOTES.md](docs/RESEARCH_NOTES.md) for the reference material
+behind the detection heuristics and the ideas queued for later phases.
 
 ## Status
 

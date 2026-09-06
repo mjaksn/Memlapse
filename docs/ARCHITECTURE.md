@@ -439,6 +439,10 @@ rather than merely reimplement it.
 
 ### References
 
+A wider reading of the memory-forensics and fileless-malware literature, with
+the feature ideas it suggests for later phases, is in
+[RESEARCH_NOTES.md](RESEARCH_NOTES.md).
+
 [^nyxwatch]: *NyxWatch: A Deep Dive into Live Memory Malware Detection (Part I)*,
     DFIR_rdk, Medium. <https://medium.com/@DFIR_rdk/nyxwatch-a-deep-dive-into-live-memory-malware-detection-part-i-4b33fcfa9fb2>
 [^malfind]: The Volatility Framework's `malfind` plugin detects potentially
