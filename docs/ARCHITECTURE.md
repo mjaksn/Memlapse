@@ -1,7 +1,7 @@
 # MemDo: Architecture
 
 MemDo is a **memory forensics tool** for Windows: a Process Explorer / System
-Informer–style monitor, with the distinguishing capability of **recording and
+Informer-style monitor, with the distinguishing capability of **recording and
 replaying the memory activity of specific threads** in a running process.
 
 Design constraints:
@@ -274,7 +274,7 @@ combination is the highest-signal heuristic in this space.[^malfind]
 ### The scoring model
 
 `analytics.score_region(region, *, head=b"")` returns a `RegionVerdict`
-(`base_addr`, `size`, `score` 0–100, `reasons`, `suspicious`). Signals are
+(`base_addr`, `size`, `score` 0 to 100, `reasons`, `suspicious`). Signals are
 **additive** and split into two tiers by whether they need the region's bytes:
 
 | Tier | Signal | Points | Needs bytes? | Rationale |
@@ -294,7 +294,7 @@ skipped and only the structural tier runs.
 Supporting helpers, all pure and unit-tested (`tests/test_analytics.py`):
 
 - `is_executable(protect)`, execute bit set and **not** a guard page.
-- `shannon_entropy(data)`, `H = -Σ pᵢ·log₂ pᵢ`, in bits/byte (0.0–8.0).[^entropy]
+- `shannon_entropy(data)`, `H = -Σ pᵢ·log₂ pᵢ`, in bits/byte (0.0 to 8.0).[^entropy]
 - `longest_nop_run(data)`, longest run of `0x90`.
 
 Suggested triage thresholds (tune against a JIT-heavy baseline, see
@@ -430,6 +430,7 @@ rather than merely reimplement it.
 [^t1055]: MITRE ATT&CK, *Process Injection* (T1055), including the *Reflective
     DLL/PE image* variants. <https://attack.mitre.org/techniques/T1055/>.
 [^entropy]: Shannon entropy (C. E. Shannon, *A Mathematical Theory of
-    Communication*, 1948) measured over bytes ranges 0–8 bits/byte; packed or
-    encrypted data approaches the 8.0 maximum, which is why a high threshold
-    (~7.0–7.2) is a common packing indicator. MemDo uses `ENTROPY_PACKED = 7.2`.
+    Communication*, 1948) measured over bytes ranges 0 to 8 bits/byte; packed
+    or encrypted data approaches the 8.0 maximum, which is why a high
+    threshold (~7.0 to 7.2) is a common packing indicator. MemDo uses
+    `ENTROPY_PACKED = 7.2`.
