@@ -150,7 +150,7 @@ class DashboardView(QWidget):
         grow.addWidget(self.ram_gauge)
         grow.addWidget(self.swap_gauge)
         gauges_lay.addLayout(grow)
-        self.readout = QLabel("—")
+        self.readout = QLabel("-")
         self.readout.setObjectName("Insight")
         self.readout.setAlignment(Qt.AlignCenter)
         gauges_lay.addWidget(self.readout)

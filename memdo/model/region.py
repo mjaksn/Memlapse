@@ -51,7 +51,7 @@ _PROTECT_BASE = {
 def protect_str(protect: int) -> str:
     """Short protection label, e.g. 'RW-' or 'R-X +G' for guarded pages."""
     if protect == 0:
-        return "—"
+        return "-"
     base = _PROTECT_BASE.get(protect & 0xFF, f"0x{protect & 0xFF:02x}")
     flags = ""
     if protect & PAGE_GUARD:

@@ -7,8 +7,8 @@ from memdo.ui.process_view import ProcessTableModel, ProcessView, _fmt_bytes
 
 
 def test_fmt_bytes():
-    assert _fmt_bytes(0) == "—"       # zero/unknown renders as an em dash
-    assert _fmt_bytes(-5) == "—"
+    assert _fmt_bytes(0) == "-"       # zero/unknown renders as a hyphen
+    assert _fmt_bytes(-5) == "-"
     assert _fmt_bytes(512) == "512 B"
     assert _fmt_bytes(1536) == "1.5 KB"
     assert _fmt_bytes(5 * 1024 * 1024) == "5.0 MB"

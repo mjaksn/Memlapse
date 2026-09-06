@@ -20,7 +20,7 @@ from .theme import heat_color
 
 def _fmt_bytes(n: int) -> str:
     if n <= 0:
-        return "—"
+        return "-"
     value = float(n)
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if value < 1024.0:

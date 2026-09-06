@@ -33,7 +33,7 @@ def test_region_state_and_type_strings():
 
 
 def test_protect_str_variants():
-    assert protect_str(0) == "—"
+    assert protect_str(0) == "-"
     assert protect_str(PAGE_READWRITE) == "RW-"
     assert protect_str(PAGE_EXECUTE_READ) == "R-X"
     assert protect_str(PAGE_NOACCESS) == "---"
