@@ -21,7 +21,8 @@ installable package, a service, or a blocking security product.
 - `memlapse/model/`, `memlapse/storage/`, `memlapse/services/`, `memlapse/analytics.py`:
   dataclasses, the SQLite schema and DAO, recording and playback, and the pure scoring
   and statistics functions. No Win32 calls here.
-- `memlapse/ui/`: the Qt widgets. Reads `win32/` only for privilege state and hex reads.
+- `memlapse/ui/`: the Qt widgets. Reads `win32/` only for privilege state, the
+  live region-map enumeration (run on a `QThreadPool` thread) and hex reads.
 - `docs/ARCHITECTURE.md` explains the design and the heuristics; `docs/RESEARCH_NOTES.md`
   holds the reference reading and the ideas queued for later phases.
 
@@ -59,11 +60,14 @@ packages; the test run is 227 passed with 100 percent line and branch coverage.
 
 ## Conventions
 
-- Layering is strict in one direction: `ui` never calls Win32 except through the two
-  uses above, `collectors` do all OS and storage work off the GUI thread, and
-  `model`, `storage`, `services` and `analytics` import no Qt widgets and no Win32
-  (QtCore signals are allowed in `services` and `collectors`).
-  Cross-thread hand-off is by Qt signal only; no locks.
+- Layering is strict in one direction: `ui` never calls Win32 except through the three
+  uses above (the privilege calls and the bounded 512-byte hex preview read run on the
+  GUI thread; live region enumeration runs on a `QThreadPool` thread), polling and
+  recording live in `collectors` on their own `QThread`s and write storage there,
+  playback reads storage on the GUI thread through `PlaybackEngine`, and `model`,
+  `storage`, `services` and `analytics` import no Qt widgets and no Win32 (QtCore
+  signals are allowed in `services` and `collectors`). Cross-thread hand-off is by Qt
+  signal only; no locks.
 - Keep the GIL free while the GUI is busy: a collector must not spend most of its tick
   in Python-level per-process work. Prefer one bulk syscall (see `win32/processes.py`)
   and precomputed display strings in the model. The reasons are recorded in
@@ -80,8 +84,10 @@ packages; the test run is 227 passed with 100 percent line and branch coverage.
 
 ## Testing
 
-- Tests live in `tests/`, one `test_<module>.py` per module, with shared fixtures and
-  fakes in `tests/conftest.py` (`make_process`, `make_region`, `FakeSampler`, ...).
+- Tests live in `tests/`, broadly one `test_<module>.py` per module (the model
+  dataclasses share `test_model.py`, the system collector and a few helpers have extra
+  files of their own), with shared fixtures and fakes in `tests/conftest.py`
+  (`make_process`, `make_region`, `FakeSampler`, ...).
 - `pyproject.toml` runs coverage on every `pytest` invocation with `fail_under = 100`
   and branch coverage on. A change that lowers coverage fails the run; add a test or, for
   a genuinely unreachable line, a `# pragma: no cover` with a reason.
