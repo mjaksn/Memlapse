@@ -7,10 +7,10 @@ from memlapse.collectors.process import ProcessCollector
 from memlapse.win32.processes import SystemProcess
 
 
-def _sp(pid, name="p.exe", threads=3, wset=100, private=50, created=1):
+def _sp(pid, name="p.exe", threads=3, wset=100, private=50, created=1, parent=0):
     return SystemProcess(pid=pid, name=name, num_threads=threads,
                          wset_bytes=wset, private_bytes=private,
-                         create_time=created)
+                         create_time=created, parent_pid=parent)
 
 
 class FakePsProcess:
@@ -81,3 +81,11 @@ def test_run_loop_emits_and_stops(qtbot, monkeypatch):
     c.wait(1000)
     assert sig.args == [["SENTINEL"]]
     assert not c.isRunning()
+
+
+def test_poll_carries_the_parent_pid(monkeypatch):
+    """The bulk table already knows the creator; the model keeps it."""
+    monkeypatch.setattr(proc_mod, "list_processes", lambda: [_sp(10, parent=600)])
+    monkeypatch.setattr(proc_mod.psutil, "Process", FakePsProcess)
+    rows = ProcessCollector()._poll()
+    assert rows[0].parent_pid == 600

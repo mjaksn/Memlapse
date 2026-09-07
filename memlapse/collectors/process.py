@@ -43,6 +43,7 @@ class ProcessCollector(PollingCollector):
                 num_threads=p.num_threads,
                 wset_bytes=p.wset_bytes,
                 private_bytes=p.private_bytes,
+                parent_pid=p.parent_pid,
             ))
         self._usernames = live  # drop entries for processes that have exited
         return results

@@ -30,7 +30,8 @@ def _fmt_bytes(n: int) -> str:
 
 
 class ProcessTableModel(QAbstractTableModel):
-    COLUMNS = ("PID", "Name", "User", "Threads", "Working Set", "Private")
+    COLUMNS = ("PID", "Name", "User", "Threads", "Working Set", "Private",
+               "Parent")
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -68,7 +69,7 @@ class ProcessTableModel(QAbstractTableModel):
         if role == Qt.UserRole:
             return self._sort[row][col]
 
-        if role == Qt.TextAlignmentRole and col in (0, 3, 4, 5):
+        if role == Qt.TextAlignmentRole and col in (0, 3, 4, 5, 6):
             return int(Qt.AlignRight | Qt.AlignVCenter)
 
         # Heat the Working Set cell relative to the busiest process in view.
@@ -84,12 +85,13 @@ class ProcessTableModel(QAbstractTableModel):
         self._max_ws = max_ws = max((r.wset_bytes for r in rows), default=0)
         self._display = [
             (p.pid, p.name, p.username, p.num_threads,
-             _fmt_bytes(p.wset_bytes), _fmt_bytes(p.private_bytes))
+             _fmt_bytes(p.wset_bytes), _fmt_bytes(p.private_bytes),
+             p.parent_pid or "")
             for p in rows
         ]
         self._sort = [
             (p.pid, p.name.lower(), p.username.lower(), p.num_threads,
-             p.wset_bytes, p.private_bytes)
+             p.wset_bytes, p.private_bytes, p.parent_pid)
             for p in rows
         ]
         self._heat = (

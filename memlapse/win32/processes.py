@@ -95,6 +95,7 @@ class SystemProcess:
     wset_bytes: int       # WorkingSetSize
     private_bytes: int    # PagefileUsage, the process's commit charge
     create_time: int      # FILETIME ticks; with pid, identifies a process instance
+    parent_pid: int       # creator's pid at creation; may be dead or reused since
 
 
 def _query_buffer() -> ctypes.Array:
@@ -134,6 +135,7 @@ def list_processes() -> list[SystemProcess]:
             wset_bytes=entry.WorkingSetSize,
             private_bytes=entry.PagefileUsage,
             create_time=entry.CreateTime,
+            parent_pid=entry.InheritedFromUniqueProcessId or 0,
         ))
         if not entry.NextEntryOffset:
             return out

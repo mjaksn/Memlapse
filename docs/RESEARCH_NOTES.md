@@ -197,7 +197,7 @@ per byte to code-like values (roughly 5.5 to 6.5) is a payload decrypting
 itself in place. Store the head entropy per sample (one float per region) and
 add a transition rule alongside RW-to-RX.
 
-### 2.4 Catch short-lived processes and record lineage at creation. New
+### 2.4 Catch short-lived processes and record lineage at creation. Part shipped
 
 **Source.** Kovter "kills itself and makes regsvr32.exe its parent process as
 soon as the process is created", after which "malicious URL connections will
@@ -214,6 +214,14 @@ would let Memlapse record every process that ever existed during a recording,
 build the parent-child tree at creation time, and flag known-bad pairs. The
 process table itself should gain parent PID and command line regardless, since
 `NtQuerySystemInformation` already returns the parent.
+
+**Status.** Half shipped. The bulk query already returned
+`InheritedFromUniqueProcessId` and threw it away, so the process table now
+carries `parent_pid` and shows a sortable Parent column. Windows does not
+keep that field current, so it names the creator at creation time and may
+point at a pid that has since exited or been reused. The rest, the command
+line, a tree built at creation, and the ETW process events that would catch
+a process living for less than one poll, is still to do.
 
 ### 2.5 Compare a process against a known-good baseline of itself. New
 
