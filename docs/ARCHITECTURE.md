@@ -311,16 +311,23 @@ combination is the highest-signal heuristic in this space.[^malfind]
 (`base_addr`, `size`, `score` 0 to 100, `reasons`, `suspicious`). Signals are
 **additive** and split into two tiers by whether they need the region's bytes:
 
-| Tier | Signal | Points | Needs bytes? | Rationale |
-|---|---|---:|:--:|---|
-| **Structural** | Executable `MEM_PRIVATE` | +50 | no | Unbacked executable memory, the core injection tell[^malfind] |
-| Structural | Executable `MEM_MAPPED` | +30 | no | Possible **module stomping** (code written over a mapped file) |
-| Structural | Writable **and** executable (RWX/RWXC) | +25 | no | Self-modifying / stager memory; rare in benign code |
-| **Content** | `MZ` header at offset 0 | +20 | yes | PE image in memory → reflective DLL injection[^t1055] |
-| Content | NOP sled (≥ `NOP_SLED_MIN` = 16 × `0x90`) | +10 | yes | Classic shellcode landing zone |
-| Content | Shannon entropy ≥ `ENTROPY_PACKED` = 7.2 bits/byte | +10 | yes | Packed or encrypted payload[^entropy] |
-| **Temporal** | Head rewritten since the previous sample, region otherwise unchanged (`REWRITTEN_POINTS`) | +15 | recording | Code written into an existing executable region, with no allocation or protection change to see |
-| Temporal | The same in a `MEM_IMAGE` region (`IMAGE_REWRITTEN_POINTS`) | +40 | recording | Inline hook or module stomping; legitimate image code is not rewritten in place |
+| Tier | Signal | Points | Needs bytes? | Technique | Rationale |
+|---|---|---:|:--:|---|---|
+| **Structural** | Executable `MEM_PRIVATE` | +50 | no | T1055 | Unbacked executable memory, the core injection tell[^malfind] |
+| Structural | Executable `MEM_MAPPED` | +30 | no | T1055 | Possible **module stomping** (code written over a mapped file) |
+| Structural | Writable **and** executable (RWX/RWXC) | +25 | no | none | Self-modifying / stager memory; rare in benign code |
+| **Content** | `MZ` header at offset 0 | +20 | yes | T1620 | PE image in memory → reflective DLL injection[^t1620] |
+| Content | NOP sled (≥ `NOP_SLED_MIN` = 16 × `0x90`) | +10 | yes | none | Classic shellcode landing zone |
+| Content | Shannon entropy ≥ `ENTROPY_PACKED` = 7.2 bits/byte | +10 | yes | T1027.002 | Packed or encrypted payload[^t1027] |
+| **Temporal** | Head rewritten since the previous sample, region otherwise unchanged (`REWRITTEN_POINTS`) | +15 | recording | T1055 | Code written into an existing executable region, with no allocation or protection change to see |
+| Temporal | The same in a `MEM_IMAGE` region (`IMAGE_REWRITTEN_POINTS`) | +40 | recording | T1055 | Inline hook or module stomping; legitimate image code is not rewritten in place |
+
+Every reason string ends with its technique in square brackets, so the tooltip
+an analyst reads and any export of the same finding name it identically
+(RESEARCH_NOTES.md 4.4). Two signals carry none: RWX is a property of a page
+rather than a technique, and a NOP sled is a shellcode artefact ATT&CK does
+not name. Inventing an identifier for either would make the rest of the
+mapping less trustworthy, not more.
 
 The total is capped at 100. Non-committed or non-executable regions
 short-circuit to score 0. When `head` is empty (no bytes captured, e.g. an
@@ -541,6 +548,11 @@ the feature ideas it suggests for later phases, is in
     <https://www.volatilityfoundation.org/>.
 [^t1055]: MITRE ATT&CK, *Process Injection* (T1055), including the *Reflective
     DLL/PE image* variants. <https://attack.mitre.org/techniques/T1055/>.
+[^t1620]: MITRE ATT&CK, *Reflective Code Loading* (T1620), loading code into a
+    process without going through the Windows loader.
+    <https://attack.mitre.org/techniques/T1620/>.
+[^t1027]: MITRE ATT&CK, *Obfuscated Files or Information: Software Packing*
+    (T1027.002). <https://attack.mitre.org/techniques/T1027/002/>.
 [^entropy]: Shannon entropy (C. E. Shannon, *A Mathematical Theory of
     Communication*, 1948) measured over bytes ranges 0 to 8 bits/byte; packed
     or encrypted data approaches the 8.0 maximum, which is why a high

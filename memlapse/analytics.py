@@ -155,6 +155,13 @@ _WRITE_EXEC = PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY
 ENTROPY_PACKED = 7.2
 #: minimum run of 0x90 bytes to count as a shellcode NOP sled.
 NOP_SLED_MIN = 16
+#: MITRE ATT&CK technique each reason maps to, appended to the reason string
+#: so a tooltip and an export both name the technique the same way. Signals
+#: with no honest mapping carry none.
+ATTACK_INJECTION = "T1055"      # Process Injection
+ATTACK_REFLECTIVE = "T1620"     # Reflective Code Loading
+ATTACK_PACKING = "T1027.002"    # Obfuscated Files or Information: Software Packing
+
 #: points for an executable region whose head bytes changed between samples
 #: while its protection and size did not (see :func:`rewritten_regions`).
 REWRITTEN_POINTS = 15
@@ -234,10 +241,15 @@ def score_region(region: Region, *, head: bytes = b"",
     # core injection tell (reflective loading, hollowing, raw shellcode).
     if region.type == MEM_PRIVATE:
         score += 50
-        reasons.append("executable private (unbacked) memory")
+        reasons.append(
+            f"executable private (unbacked) memory [{ATTACK_INJECTION}]"
+        )
     elif region.type == MEM_MAPPED:
         score += 30
-        reasons.append("executable mapped memory (possible module stomping)")
+        reasons.append(
+            "executable mapped memory (possible module stomping) "
+            f"[{ATTACK_INJECTION}]"
+        )
 
     if region.protect & _WRITE_EXEC:
         score += 25
@@ -246,13 +258,15 @@ def score_region(region: Region, *, head: bytes = b"",
     # Content: only meaningful when the region's head was actually read.
     if head[:2] == b"MZ":
         score += 20
-        reasons.append("PE header (MZ) in memory, reflective DLL")
+        reasons.append(
+            f"PE header (MZ) in memory, reflective DLL [{ATTACK_REFLECTIVE}]"
+        )
     if longest_nop_run(head) >= NOP_SLED_MIN:
         score += 10
         reasons.append("NOP sled")
     if head and shannon_entropy(head) >= ENTROPY_PACKED:
         score += 10
-        reasons.append("high entropy (packed/encrypted)")
+        reasons.append(f"high entropy (packed/encrypted) [{ATTACK_PACKING}]")
 
     # Temporal: the bytes changed but nothing about the region did. A loader
     # that overwrites an existing executable region never allocates and never
@@ -262,11 +276,15 @@ def score_region(region: Region, *, head: bytes = b"",
         if region.type == MEM_IMAGE:
             score += IMAGE_REWRITTEN_POINTS
             reasons.append(
-                "image code rewritten in memory (inline hook or module stomping)"
+                "image code rewritten in memory (inline hook or module "
+                f"stomping) [{ATTACK_INJECTION}]"
             )
         else:
             score += REWRITTEN_POINTS
-            reasons.append("executable memory rewritten since previous sample")
+            reasons.append(
+                "executable memory rewritten since previous sample "
+                f"[{ATTACK_INJECTION}]"
+            )
 
     return RegionVerdict(
         region.base_addr, region.size, min(score, 100), tuple(reasons)

@@ -288,9 +288,31 @@ def test_score_region_rewritten_private_adds_points():
 def test_score_region_rewritten_image_weighs_more():
     v = score_region(_snap(type=_IMAGE), rewritten=True)
     assert v.score == IMAGE_REWRITTEN_POINTS
-    assert v.reasons == ("image code rewritten in memory (inline hook or module stomping)",)
+    assert v.reasons == (
+        "image code rewritten in memory (inline hook or module stomping) [T1055]",
+    )
 
 
 def test_score_region_rewritten_ignored_for_non_executable():
     v = score_region(_snap(protect=_RW), rewritten=True)
     assert v.score == 0 and v.reasons == ()
+
+
+# --- ATT&CK technique tags on the reason strings ---------------------------
+def test_reasons_carry_their_attack_technique():
+    from memlapse.analytics import (
+        ATTACK_INJECTION, ATTACK_PACKING, ATTACK_REFLECTIVE,
+    )
+    v = score_region(_snap(), head=b"MZ" + bytes(range(256)))
+    tagged = {r.rsplit("[", 1)[-1].rstrip("]") for r in v.reasons if r.endswith("]")}
+    assert tagged == {ATTACK_INJECTION, ATTACK_REFLECTIVE, ATTACK_PACKING}
+    mapped = score_region(_snap(type=MEM_MAPPED))
+    assert mapped.reasons[0].endswith(f"[{ATTACK_INJECTION}]")
+
+
+def test_rwx_and_nop_sled_carry_no_technique():
+    """Neither maps to an ATT&CK technique, so neither invents one."""
+    reasons = score_region(_snap(protect=PAGE_EXECUTE_READWRITE), head=b"\x90" * 64).reasons
+    assert [r for r in reasons if not r.endswith("]")] == [
+        "writable + executable (RWX)", "NOP sled",
+    ]

@@ -326,7 +326,7 @@ interval, and a hash of the recording) and a "export recording" action would
 make a recording something an analyst can hand over and someone else can
 replay and re-score with confidence.
 
-### 4.4 Tag reasons with ATT&CK technique IDs. New
+### 4.4 Tag reasons with ATT&CK technique IDs. Shipped
 
 **Source.** Each detection in the guide is mapped to a MITRE ATT&CK technique,
 "Mapping your detections to MITRE ATT&CK ensures coverage visibility and helps
@@ -337,6 +337,12 @@ is T1055.002, process injection T1055 [C, "Common Fileless Malware Techniques"].
 human-readable `reasons` shown in the region tooltip do not. Appending the
 technique ID to each reason string is a one-line change that makes exports
 readable by anyone who works from ATT&CK.
+
+**Status.** Implemented: every reason ends with its technique in square
+brackets, from the constants `ATTACK_INJECTION` (T1055), `ATTACK_REFLECTIVE`
+(T1620) and `ATTACK_PACKING` (T1027.002) in `analytics.py`, and the scoring
+table in ARCHITECTURE.md carries the same column. The RWX and NOP sled
+signals are deliberately left untagged: neither maps to a technique honestly.
 
 ### 4.5 Data-driven rules and portable findings. New
 
