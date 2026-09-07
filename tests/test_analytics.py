@@ -366,3 +366,41 @@ def test_score_region_thread_start_in_an_image_is_normal():
     """Every legitimate thread starts inside a mapped image."""
     v = score_region(_snap(type=_IMAGE), thread_start=True)
     assert v.score == 0 and v.reasons == ()
+
+
+# --- falling entropy: a payload unpacking in place -------------------------
+_PACKED = bytes(range(256))                  # 8.0 bits/byte
+_CODE = b"\x48\x8b\x05\x01" * 64           # 2.0 bits/byte, no NOP run
+
+
+def test_unpacked_regions_flags_entropy_falling_to_code():
+    from memlapse.analytics import unpacked_regions
+    assert unpacked_regions({0x1000: _PACKED}, {0x1000: _CODE}, {0x1000}) == {0x1000}
+
+
+def test_unpacked_regions_ignores_the_other_direction_and_no_change():
+    from memlapse.analytics import unpacked_regions
+    # Code turning into noise is a fresh packed payload, not an unpacking.
+    assert unpacked_regions({0x1000: _CODE}, {0x1000: _PACKED}, {0x1000}) == set()
+    assert unpacked_regions({0x1000: _CODE}, {0x1000: _CODE}, {0x1000}) == set()
+
+
+def test_unpacked_regions_needs_both_heads():
+    from memlapse.analytics import unpacked_regions
+    assert unpacked_regions({}, {0x1000: _CODE}, {0x1000}) == set()
+    assert unpacked_regions({0x1000: _PACKED}, {}, {0x1000}) == set()
+    assert unpacked_regions({0x1000: _PACKED}, {0x1000: b""}, {0x1000}) == set()
+
+
+def test_unpacked_regions_only_looks_at_what_changed():
+    """Heads are stored by content, so an unchanged head cannot have moved."""
+    from memlapse.analytics import unpacked_regions
+    assert unpacked_regions({0x1000: _PACKED}, {0x1000: _CODE}, set()) == set()
+
+
+def test_score_region_unpacked_stacks_with_rewritten():
+    from memlapse.analytics import REWRITTEN_POINTS, UNPACKED_POINTS
+    v = score_region(_snap(), head=_CODE, rewritten=True, unpacked=True)
+    assert v.score == 50 + REWRITTEN_POINTS + UNPACKED_POINTS  # 85
+    assert v.band == "likely injection"
+    assert any("unpacked in place" in r for r in v.reasons)

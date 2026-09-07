@@ -238,6 +238,7 @@ class MainWindow(QMainWindow):
         heads = self.playback.heads(ts_us)
         rewritten = self.playback.rewritten(ts_us)
         thread_starts = self.playback.thread_start_regions(ts_us)
+        unpacked = self.playback.unpacked(ts_us, rewritten)
         if state is not None:
             header = (
                 f"Recording #{self.playback.recording_id}, PID {state.pid}, "
@@ -250,7 +251,7 @@ class MainWindow(QMainWindow):
         else:
             header = f"Recording #{self.playback.recording_id}, no data at this time"
         self.region_view.show_recorded_regions(regions, header, heads, rewritten,
-                                               thread_starts)
+                                               thread_starts, unpacked)
 
     # --- shutdown ---------------------------------------------------------
     def closeEvent(self, event) -> None:

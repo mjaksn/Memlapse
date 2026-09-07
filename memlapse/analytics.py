@@ -153,8 +153,16 @@ _WRITE_EXEC = PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY
 
 #: bits/byte above which a buffer looks packed or encrypted (max is 8.0).
 ENTROPY_PACKED = 7.2
+#: bits/byte at or below which a buffer looks like plain code rather than a
+#: packed payload. Compiled x86 sits well under this; the gap between it and
+#: ENTROPY_PACKED is deliberate, so a small wobble is not a decryption.
+ENTROPY_CODE_MAX = 6.5
 #: minimum run of 0x90 bytes to count as a shellcode NOP sled.
 NOP_SLED_MIN = 16
+#: points for a region whose head fell from packed entropy to code-like
+#: entropy between two samples: a payload that decrypted itself in place.
+UNPACKED_POINTS = 20
+
 #: points for a committed, executable region that is not image-backed and
 #: that a thread starts in. Every legitimate thread starts inside a mapped
 #: image, so a start anywhere else is the shellcode-with-a-thread case.
@@ -249,7 +257,8 @@ class RegionVerdict:
 
 def score_region(region: Region, *, head: bytes = b"",
                  rewritten: bool = False,
-                 thread_start: bool = False) -> RegionVerdict:
+                 thread_start: bool = False,
+                 unpacked: bool = False) -> RegionVerdict:
     """Heuristic injection score for a single region.
 
     ``head`` is the first bytes of the region (from ReadProcessMemory) when
@@ -259,6 +268,10 @@ def score_region(region: Region, *, head: bytes = b"",
     ``thread_start`` says a thread's Win32 start address falls inside this
     region (see :func:`regions_with_thread_starts`); it only scores when the
     region is not image-backed, since that is where threads normally start.
+    ``unpacked`` says the head's entropy fell from packed to code-like
+    between samples (see :func:`unpacked_regions`). It stacks with
+    ``rewritten``, deliberately: the bytes changing is one fact and what they
+    changed into is another, and a private region that did both reaches 85.
     Scores are additive and capped at 100. A non-executable or non-committed
     region always scores 0.
     """
@@ -310,6 +323,13 @@ def score_region(region: Region, *, head: bytes = b"",
     # that overwrites an existing executable region never allocates and never
     # flips a protection, so this is the only signal it leaves. JIT engines
     # rewrite private code legitimately; image code is not rewritten at all.
+    if unpacked:
+        score += UNPACKED_POINTS
+        reasons.append(
+            "entropy fell from packed to code-like, unpacked in place "
+            f"[{ATTACK_PACKING}]"
+        )
+
     if rewritten:
         if region.type == MEM_IMAGE:
             score += IMAGE_REWRITTEN_POINTS
@@ -376,3 +396,30 @@ def regions_with_thread_starts(regions: Sequence[Region],
                 hits.add(region.base_addr)
                 break
     return hits
+
+
+def unpacked_regions(prev_heads: dict[int, bytes],
+                     curr_heads: dict[int, bytes],
+                     changed) -> set[int]:
+    """Base addresses whose head fell from packed entropy to code-like entropy.
+
+    ``changed`` is the set of regions already known to have been rewritten (see
+    :func:`rewritten_regions`), which is the only place this can happen: heads
+    are stored once per distinct content, so a head that did not change cannot
+    have changed entropy. Scanning only those keeps the cost proportional to
+    what moved rather than to the size of the map.
+
+    A payload that decrypts itself in place goes from close to eight bits per
+    byte to something a disassembler would recognise. The reverse, code turning
+    into noise, is not this signal: that is a region being overwritten with a
+    new packed payload, which :func:`rewritten_regions` already reports.
+    """
+    fell: set[int] = set()
+    for base in changed:
+        before, after = prev_heads.get(base), curr_heads.get(base)
+        if not before or not after:
+            continue
+        if (shannon_entropy(before) >= ENTROPY_PACKED
+                and shannon_entropy(after) <= ENTROPY_CODE_MAX):
+            fell.add(base)
+    return fell

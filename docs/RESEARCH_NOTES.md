@@ -197,7 +197,7 @@ Indicator"].
 **Implication.** Both statements support the planned `score_transition`
 detector and the weight already given to unbacked executable memory.
 
-### 2.3 Falling entropy is in-memory unpacking. New
+### 2.3 Falling entropy is in-memory unpacking. Shipped
 
 **Source.** "While suspicious files can be hidden via encryption and packing,
 all processes are visible in memory at run-time" [K22, §1.3]. "Polymorphic and
@@ -209,6 +209,16 @@ recording, a private executable region whose entropy drops from above 7 bits
 per byte to code-like values (roughly 5.5 to 6.5) is a payload decrypting
 itself in place. Store the head entropy per sample (one float per region) and
 add a transition rule alongside RW-to-RX.
+
+**Status.** Implemented as `analytics.unpacked_regions`, adding
+`UNPACKED_POINTS` (20) when a head's entropy falls from `ENTROPY_PACKED`
+(7.2) to `ENTROPY_CODE_MAX` (6.5) or below. No float is stored: heads are
+already deduplicated by content, so entropy is computed from the two heads
+at read time, and only for the regions the rewrite detector already flagged,
+which is the only set where the content can have moved at all. It stacks
+with the rewrite, so a private region that decrypted itself scores 85. This
+is playback only: live mode compares one refresh with the next and does not
+keep the earlier bytes.
 
 ### 2.4 Catch short-lived processes and record lineage at creation. Part shipped
 

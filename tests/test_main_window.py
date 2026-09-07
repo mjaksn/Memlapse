@@ -304,3 +304,27 @@ def test_playback_seek_scores_a_recorded_thread_start(main_window):
     win._on_seek(1_000)
     model = win.region_view.model
     assert model.data(model.index(0, 5), Qt.DisplayRole) == "75"  # 50 + 25
+
+
+# --- a decrypting payload scores on both temporal signals ------------------
+def test_playback_seek_scores_an_unpacking_region(main_window):
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    win, db = main_window
+    packed, code = bytes(range(256)), b"\x48\x8b\x05\x01" * 64
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    conn = connect(db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 1_000)
+    for ts, head in ((1_000, packed), (2_000, code)):
+        dao.add_sample(rid, ts, ProcState(ts, 1000, 100, 50, 3), [region],
+                       {0x40000: head})
+    dao.end_recording(rid, 3_000)
+    conn.close()
+
+    win._open_recording(rid)
+    win._on_seek(2_000)
+    model = win.region_view.model
+    assert model.data(model.index(0, 5), Qt.DisplayRole) == "85"  # 50 + 15 + 20

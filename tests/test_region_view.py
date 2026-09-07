@@ -309,3 +309,27 @@ def test_show_recorded_regions_passes_thread_starts_through(view):
     region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
     view.show_recorded_regions([region], "Recording #1", None, None, {0x40000})
     assert view.model.data(view.model.index(0, 5), Qt.DisplayRole) == "75"
+
+
+# --- the unpacking signal reaches the Score column -------------------------
+def test_region_model_scores_an_unpacked_region(rmodel):
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    rmodel.set_regions([region], unpacked={0x40000})
+    assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == "70"  # 50 + 20
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert "unpacked in place" in tip
+
+
+def test_show_recorded_regions_passes_unpacked_through(view):
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    view.show_recorded_regions([region], "Recording #1", None, None, None,
+                               {0x40000})
+    assert view.model.data(view.model.index(0, 5), Qt.DisplayRole) == "70"

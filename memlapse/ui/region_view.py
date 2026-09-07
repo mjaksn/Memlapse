@@ -127,24 +127,28 @@ class RegionTableModel(QAbstractTableModel):
     def set_regions(self, rows: list[Region],
                     heads: dict[int, bytes] | None = None,
                     rewritten: set[int] | None = None,
-                    thread_starts: set[int] | None = None) -> None:
+                    thread_starts: set[int] | None = None,
+                    unpacked: set[int] | None = None) -> None:
         """Replace the rows and score each one.
 
         ``heads`` carries captured bytes by base address and ``rewritten`` the
         base addresses whose head changed since the previous sample; both are
         empty in live mode, where only the structural signals apply.
         ``thread_starts`` carries the base addresses a thread starts in, which
-        both modes can know.
+        both modes can know, and ``unpacked`` those whose entropy fell to
+        code-like values, which needs two samples and so is playback only.
         """
         heads = heads or {}
         rewritten = rewritten or set()
         thread_starts = thread_starts or set()
+        unpacked = unpacked or set()
         self.beginResetModel()
         self._rows = rows
         self._verdicts = [
             score_region(r, head=heads.get(r.base_addr, b""),
                          rewritten=r.base_addr in rewritten,
-                         thread_start=r.base_addr in thread_starts)
+                         thread_start=r.base_addr in thread_starts,
+                         unpacked=r.base_addr in unpacked)
             for r in rows
         ]
         self.endResetModel()
@@ -237,14 +241,16 @@ class RegionView(QWidget):
     def show_recorded_regions(self, regions: list[Region], header: str,
                               heads: dict[int, bytes] | None = None,
                               rewritten: set[int] | None = None,
-                              thread_starts: set[int] | None = None) -> None:
+                              thread_starts: set[int] | None = None,
+                              unpacked: set[int] | None = None) -> None:
         self._pid = None
         self._live = False
         # Invalidate any in-flight live enumeration so it can't overwrite the
         # recorded map when it finishes.
         self._load_seq += 1
         self._pending = None
-        self.model.set_regions(regions, heads, rewritten, thread_starts)
+        self.model.set_regions(regions, heads, rewritten, thread_starts,
+                               unpacked)
         self.header.setText(header)
         self.hex.setPlainText(
             "(hex preview is live only; a recording keeps the first 256 bytes of "

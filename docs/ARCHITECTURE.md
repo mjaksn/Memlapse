@@ -325,6 +325,7 @@ combination is the highest-signal heuristic in this space.[^malfind]
 | Content | Shannon entropy ≥ `ENTROPY_PACKED` = 7.2 bits/byte | +10 | yes | T1027.002 | Packed or encrypted payload[^t1027] |
 | **Temporal** | Head rewritten since the previous sample, region otherwise unchanged (`REWRITTEN_POINTS`) | +15 | recording | T1055 | Code written into an existing executable region, with no allocation or protection change to see |
 | Temporal | The same in a `MEM_IMAGE` region (`IMAGE_REWRITTEN_POINTS`) | +40 | recording | T1055 | Inline hook or module stomping; legitimate image code is not rewritten in place |
+| Temporal | Head entropy fell from `ENTROPY_PACKED` to `ENTROPY_CODE_MAX` = 6.5 or below (`UNPACKED_POINTS`) | +20 | recording | T1027.002 | A packed payload that decrypted itself in place; stacks with the rewrite it implies |
 
 Every reason string ends with its technique in square brackets, so the tooltip
 an analyst reads and any export of the same finding name it identically
