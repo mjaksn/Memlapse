@@ -1,8 +1,9 @@
-"""Vivid dark theme for the dashboard surface.
+"""Dark theme.
 
-Scoped to the dashboard widgets (via an object-name'd stylesheet) so the
-forensic monitor keeps its native look. Exposes a neon palette, a green→red
-heat ramp, and pyqtgraph defaults.
+``DASHBOARD_QSS`` is scoped to the dashboard widgets through object names;
+``APP_QSS`` is applied to the whole application in app.py, so the forensic
+monitor is styled too. Exposes the neon palette, a green to red heat ramp,
+both stylesheets and pyqtgraph defaults.
 """
 
 from __future__ import annotations

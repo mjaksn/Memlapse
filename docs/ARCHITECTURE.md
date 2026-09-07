@@ -1,8 +1,10 @@
 # Memlapse: Architecture
 
 Memlapse is a **memory forensics tool** for Windows: a Process Explorer / System
-Informer-style monitor, with the distinguishing capability of **recording and
-replaying the memory activity of specific threads** in a running process.
+Informer-style monitor, designed around the distinguishing capability of
+**recording and replaying the memory activity of specific threads** in a running
+process (process-wide recording and playback are built; the per-thread engine
+is Phase 5).
 
 Design constraints:
 
@@ -43,7 +45,7 @@ to get it, in increasing power and cost:
 2. **ETW (medium, the sweet spot).** Event Tracing for Windows emits kernel
    events (`VirtualAlloc`/`VirtualFree`, page faults, image loads) and
    **each event carries the ThreadId**. This is how you legitimately say
-   "thread 4210 committed 2 MB here." `pywintrace` (Microsoft's Python ETW lib)
+   "thread 4210 committed 2 MB here." `pywintrace` (a Python ETW library)
    subscribes to the Kernel Memory and PerfInfo providers. Requires admin.
 
 3. **Guard-page / debugger instrumentation (hard, invasive).** Set `PAGE_GUARD`
@@ -71,7 +73,6 @@ baseline** and **2 (ETW) is the forensic engine**, with 3 left as a pluggable
                 │ Qt signals (thread-safe)
 ┌───────────────┴─────────────────────────────┐
 │  Application/service layer                    │
-│  • SessionController (live vs. replay mode)   │
 │  • RecordingManager (start/stop/annotate)     │
 │  • PlaybackEngine (seek to timestamp T)       │
 └───────────────▲─────────────────────────────┘
@@ -80,8 +81,8 @@ baseline** and **2 (ETW) is the forensic engine**, with 3 left as a pluggable
 │  Collectors (background)      │  Storage      │
 │  • ProcessCollector (NtQSI)   │  • SQLite     │
 │  • RegionSampler (VirtualQ.)  │    (WAL)      │
-│  • EtwCollector (pywintrace)  │  • schema/DAO │
-│    → thread-tagged events     │  • migrations │
+│  • EtwCollector (pywintrace)  │  • schema.sql │
+│    → thread-tagged events     │  • DAO        │
 └──────────────────────────────┴──────────────┘
                 │
         Win32 / SeDebugPrivilege
@@ -161,8 +162,10 @@ Each phase is usable on its own.
 
 ## Key risks to decide on early
 
-- **Elevation:** most useful targets need admin + SeDebugPrivilege. Plan to
-  relaunch elevated (UAC) on startup.
+- **Elevation:** most useful targets need admin + SeDebugPrivilege. The app
+  enables the privilege on startup when it can and relaunches through UAC only
+  when started with `--elevate`; the status bar reports whether the process is
+  elevated.
 - **Antivirus/EDR:** `ReadProcessMemory` + guard pages against arbitrary
   processes looks exactly like malware. Fine on your own box; EDR may flag it.
 - **ETW volume:** memory events are a firehose. Needs per-PID filtering and
@@ -170,38 +173,44 @@ Each phase is usable on its own.
 
 ---
 
-## Proposed package layout
+## Package layout
 
 ```
 memlapse/
   __init__.py
-  app.py                 # entry point: elevation check, launch Qt app
-  model/                 # dataclasses: ProcessInfo, Region, MemEvent, ...
+  app.py                 # entry point: SeDebugPrivilege, optional UAC relaunch, launch Qt app
+  analytics.py           # pure stats (leak rate, z-score, movers) and injection scoring
+  model/                 # dataclasses: process.py, region.py, system.py
   collectors/
     base.py              # PollingCollector: QThread loop, latest-only delivery
     process.py           # ProcessCollector over win32/processes.py
-    region.py            # VirtualQueryEx RegionSampler
-    etw.py               # pywintrace EtwCollector (Phase 5)
+    region.py            # VirtualQueryEx RegionSampler (+ head bytes)
+    system.py            # SystemCollector (psutil totals) for the dashboard
+    etw.py               # pywintrace EtwCollector (Phase 5, not yet written)
   storage/
-    db.py                # connection, WAL setup, migrations
+    db.py                # connection, WAL setup, idempotent schema apply
     dao.py               # typed read/write helpers
     schema.sql
   services/
-    session.py           # SessionController (live vs replay)
     recording.py         # RecordingManager
     playback.py          # PlaybackEngine
   ui/
-    main_window.py
+    main_window.py       # live/playback mode switch, toolbar, tabs
     process_view.py
     region_view.py
     timeline.py
+    dashboard.py
+    gauges.py
+    hexdump.py
+    theme.py
   win32/
     privileges.py        # SeDebugPrivilege, elevation
-    memory.py            # ctypes wrappers: OpenProcess, VirtualQueryEx, ...
+    memory.py            # ctypes wrappers: OpenProcess, VirtualQueryEx, ReadProcessMemory
     processes.py         # ctypes wrapper: NtQuerySystemInformation process table
 tests/
 docs/
   ARCHITECTURE.md
+  RESEARCH_NOTES.md
 ```
 
 ---
@@ -243,8 +252,9 @@ Pieces:
   `shannon_entropy`, …) described in the next section. Fully unit-tested
   (`tests/test_analytics.py`).
 - **`ui/theme.py`**: neon-on-charcoal palette + green→red heat ramp + pyqtgraph
-  defaults, scoped to the dashboard via an object-name'd stylesheet so the
-  monitor keeps its native look.
+  defaults, plus two stylesheets: `DASHBOARD_QSS`, scoped to the dashboard
+  widgets through their object names, and `APP_QSS`, applied to the whole
+  application in `app.py` so the forensic monitor shares the dark look.
 - **`ui/gauges.py`, `AnimatedGauge`**: 270° arc gauge eased by a ~30 fps render
   timer, decoupled from the 1 Hz data cadence.
 - **`ui/dashboard.py`, `DashboardView`**: composes the gauges, a scrolling

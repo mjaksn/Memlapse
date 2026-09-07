@@ -1,19 +1,25 @@
 # Memlapse
 
 A Windows memory forensics tool, Process Explorer / System Informer-style
-monitoring, with recording and playback of the memory activity of specific
-threads. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design and
-[docs/RESEARCH_NOTES.md](docs/RESEARCH_NOTES.md) for the reference material
-behind the detection heuristics and the ideas queued for later phases.
+monitoring, that records a process's memory map over time and replays it.
+Recording and playback of the memory activity of specific threads is the
+planned next phase (Phase 5). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+for the design and [docs/RESEARCH_NOTES.md](docs/RESEARCH_NOTES.md) for the
+reference material behind the detection heuristics and the ideas queued for
+later phases.
 
 ## Status
 
 - **Phase 1**, live process monitor (sortable, filterable table).
 - **Phase 2**, memory-map view: select a process to see its VirtualQueryEx
   region map, click a region for a hex preview of its bytes.
-- **Phase 3**, record a process's memory map over time to SQLite, then scrub
-  the recording with the timeline to replay how its regions and footprint
-  evolved.
+- **Phase 3**, record a process's memory map over time to SQLite.
+- **Phase 4**, playback: scrub the recording with the timeline to replay how
+  its regions and footprint evolved.
+- **Phase 6**, injection heuristics: each executable region gets a 0 to 100
+  score (unbacked private or mapped executable memory, RWX, PE header, NOP
+  sled, high entropy) shown as a Score column with a heat tint and a reason
+  tooltip in the region view.
 
 - **Dashboard**, a vivid, near-live overview tab: system RAM/swap gauges, a
   scrolling usage timeline, a heat-ranked top-process list (click to drill into
@@ -23,7 +29,9 @@ Next: per-thread memory activity via ETW (Phase 5).
 
 ## Use
 
-1. Select a process (left) to inspect its live memory map (right).
+1. Open the **Forensic Monitor** tab (the app starts on the Dashboard; clicking
+   a process bar there also jumps to the monitor), then select a process (left)
+   to inspect its live memory map (right).
 2. Click **● Record** to sample it over time; **■ Stop** when done.
 3. **Open Recording ▾** → pick a recording to enter playback, then drag the
    timeline (or press ▶) to replay it. **Live** returns to real-time mode.
