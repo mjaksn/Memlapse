@@ -1,0 +1,73 @@
+name: CI
+
+# Deliberately not on every push. A branch with no pull request open against
+# it runs nothing, and a merge runs the suite once rather than twice:
+#
+#   pull_request       while a change is up for review, re-running on each
+#                      push to it, so what passed is always the code being
+#                      merged.
+#   push to main       after the merge has happened.
+#   workflow_dispatch  on demand, for a run nobody asked for by pushing.
+#
+# The pull_request trigger is what makes a branch protection requirement
+# enforceable. A dispatched run attaches its checks to the commit but not to
+# the pull request's status rollup, and the rollup is what a ruleset reads, so
+# dispatch is a convenience here and never the gate.
+#
+# The ruleset on main should require the `gate` job below and nothing else.
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests on windows
+    # Windows only, and not as a shortcut. The win32 package loads kernel32
+    # and advapi32 through ctypes at import time, so the suite cannot even be
+    # collected anywhere else, and a green run on Linux would prove nothing
+    # about the platform the tool exists for.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          # The one interpreter the project runs on. The lock file's hashes
+          # cover every wheel of each pinned version, so this is a choice of
+          # runtime rather than a constraint the hashes impose.
+          python-version: "3.14"
+      - name: install the pinned dependencies
+        # Pinned by version and by hash, and --require-hashes is what makes
+        # the hashes mean anything. Left off, pip installs the version and
+        # verifies nothing. The dev file carries the runtime set as well as
+        # the test tools, which is why only one install is needed.
+        run: pip install --require-hashes --requirement requirements-dev.txt
+      - name: run the suite
+        # Coverage is on by default through pyproject.toml, with the gate at
+        # 100 percent line and branch, so a missing test fails this step
+        # rather than passing quietly. The Qt widgets run headless because
+        # tests/conftest.py selects the offscreen platform before PySide6 is
+        # imported; nothing here needs a display or elevation.
+        run: python -m pytest
+
+  gate:
+    name: gate
+    # The single check for branch protection to require. Runs whatever the
+    # others did, so a failure upstream is reported here rather than leaving
+    # the gate skipped and the requirement satisfied by default.
+    if: always()
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: every job must have succeeded
+        run: |
+          echo "test ${{ needs.test.result }}"
+          [ "${{ needs.test.result }}" = "success" ] || exit 1

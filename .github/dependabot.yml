@@ -1,0 +1,30 @@
+version: 2
+
+# The actions the workflow calls, and the Python packages the lock files pin.
+# The cooldown is the house rule that no third-party release is used inside
+# seven days of being published; it holds for both of these ecosystems
+# because PyPI and GitHub both tell Dependabot when a version came out.
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "ci"
+    open-pull-requests-limit: 3
+
+  # requirements.txt and requirements-dev.txt are compiled from the .in files
+  # beside them with hashes. Dependabot rewrites the --hash lines along with
+  # the version, which is the only thing that keeps a hash pin from being a
+  # pin that never moves again.
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "deps"
+    open-pull-requests-limit: 3

@@ -95,6 +95,10 @@ packages; the test run is 228 passed with 100 percent line and branch coverage.
   PySide6 is imported, so the suite runs headless without any environment setup.
 - Win32 wrappers are tested against fakes; nothing in the suite needs elevation or a real
   target process.
+- CI (`.github/workflows/ci.yml`) runs the same install and `python -m pytest` on
+  windows-latest with Python 3.14, on pull requests and pushes to main. Windows only,
+  because `memlapse/win32` loads kernel32 and advapi32 at import time. The `gate` job
+  is the one check a ruleset should require.
 
 ## Gotchas
 
