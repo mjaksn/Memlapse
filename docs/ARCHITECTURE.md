@@ -424,6 +424,8 @@ NyxWatch author acknowledges apply here:
    allocate private, executable (sometimes RWX) memory for generated code. A
    naive scan lights them up. Mitigation is an allowlist / behavioural context,
    which is why the thresholds above must be tuned against a JIT-heavy baseline.
+   The shape that allowlist should take is
+   [set out below](#planned-allowlist-semantics).
 2. **RW→RX flip evasion.** Mature loaders allocate `PAGE_READWRITE`, write the
    payload, then `VirtualProtect` to `PAGE_EXECUTE_READ`, never holding RWX. A
    single snapshot can miss this. The **temporal** detector below closes it.
@@ -446,6 +448,39 @@ it directly addresses evasion (2) above. The planned entry point is
 `analytics.score_transition(prev_region, curr_region)`, scored over the
 playback timeline, the feature that makes Memlapse *exceed* the source technique
 rather than merely reimplement it.
+
+The rule states its window explicitly rather than implying "consecutive
+samples" ([RESEARCH_NOTES.md](RESEARCH_NOTES.md) 7.2), and carries three
+parameters: an **outer window** both steps must fall inside, a **maximum gap**
+between one step and the next, and a **threshold per step**. Consecutive samples
+are then one configuration of the rule rather than its definition, which matters
+twice over. A recording sampled every second and one sampled every thirty would
+otherwise mean different things by "the next sample", and a loader that
+allocates RW, waits for the user to click something, and flips to RX a minute
+later is the same pattern stretched over a gap that consecutive-sample logic
+cannot express.
+
+### Planned: allowlist semantics
+
+Whatever form the JIT allowlist in limitation (1) takes, it suppresses a
+verdict, never a row. The rules a commercial platform uses for this transfer
+directly ([RESEARCH_NOTES.md](RESEARCH_NOTES.md) 7.1 and 7.3):
+
+- **Keep the row and the raw score.** An allowlisted region stays in the table
+  with the score the heuristics gave it, under a distinct "allowlisted" verdict
+  in place of the heat tint. Filtering it out hides the one thing an analyst
+  reviewing a false positive needs to see.
+- **Key it on something durable.** An image path plus its publisher, or a head
+  hash, and never a PID, which Windows reuses within minutes.
+- **Scope it to one heuristic.** An entry should exempt a JIT host from the
+  executable-private rule without exempting it from the `MZ` or NOP sled rules,
+  so a stomped CLR still scores.
+- **Write it into the recording.** A replay on another machine then scores the
+  same way, and the reader can see what was excluded, which is what makes a
+  recording evidence someone else can check.
+- **Make removal restore the verdict.** Because the entry suppresses the verdict
+  and leaves the score alone, deleting it brings the original finding back with
+  no history to recompute.
 
 ### References
 

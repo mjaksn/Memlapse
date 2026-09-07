@@ -8,6 +8,11 @@ for the design and [docs/RESEARCH_NOTES.md](docs/RESEARCH_NOTES.md) for the
 reference material behind the detection heuristics and the ideas queued for
 later phases.
 
+Antivirus checks are made mostly when a process starts, which leaves code
+written into a process that is already running unscanned. Sampling a live
+process on a timer covers exactly that gap, and recording the samples lets an
+analyst scrub back to the moment the memory changed.
+
 ## Status
 
 - **Phase 1**, live process monitor (sortable, filterable table).
