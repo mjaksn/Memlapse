@@ -116,17 +116,23 @@ Two more rules keep the GUI thread responsive, both learned the hard way:
 recording(id, target_pid, target_name, started_utc, ended_utc, note)
 process_snapshot(id, recording_id, ts_us, pid, wset_bytes, priv_bytes, thread_count)
 thread(id, recording_id, tid, pid, start_ts, symbol_hint)
-region_snapshot(id, recording_id, ts_us, base_addr, size, protect, state, type)
-region_blob(region_snapshot_id, content BLOB)        -- captured head bytes (see below)
+region_snapshot(id, recording_id, ts_us, base_addr, size, protect, state, type, head_hash)
+head(hash BLOB PRIMARY KEY, content BLOB)           -- captured head bytes, one row per distinct content
+region_blob(region_snapshot_id, content BLOB)        -- legacy: heads from recordings made before `head` existed
 mem_event(id, recording_id, ts_us, tid, kind, addr, size, protect)  -- ETW-sourced, thread-tagged
 ```
 
-- `region_blob` is now **populated** by the sampler: for every *executable,
-  readable* region it stores the first `HEAD_BYTES` (256) of content, keyed to
-  its `region_snapshot` row. This feeds the content heuristics in
+- For every *executable, readable* region the sampler captures the first
+  `HEAD_BYTES` (256) of content. The bytes go into `head` once per distinct
+  content, keyed by SHA-256, and the region row carries the hash in
+  `head_hash`. Executable regions rarely change between ticks, so a long
+  recording pays 32 bytes per row rather than 256, and the hash is also what
+  the content-change detector compares. This feeds the content heuristics in
   ["In-memory injection heuristics"](#in-memory-injection-heuristics-live-memory-malware-detection).
-  Recordings made before this feature simply have no blobs and degrade
-  gracefully to structural-only scoring.
+  Recordings made before heads were captured have no blobs and degrade
+  gracefully to structural-only scoring; those made before `head` existed keep
+  their bytes in `region_blob` and read back through it, without hashes.
+  `storage/db.py` adds the `head_hash` column to an older database on open.
 - `mem_event.tid` powers "play back this thread's activity."
 - Index on `(recording_id, ts_us)` and `(recording_id, tid, ts_us)`.
 - Store `ts_us` as **integer microseconds**, not text.
@@ -313,6 +319,8 @@ combination is the highest-signal heuristic in this space.[^malfind]
 | **Content** | `MZ` header at offset 0 | +20 | yes | PE image in memory → reflective DLL injection[^t1055] |
 | Content | NOP sled (≥ `NOP_SLED_MIN` = 16 × `0x90`) | +10 | yes | Classic shellcode landing zone |
 | Content | Shannon entropy ≥ `ENTROPY_PACKED` = 7.2 bits/byte | +10 | yes | Packed or encrypted payload[^entropy] |
+| **Temporal** | Head rewritten since the previous sample, region otherwise unchanged (`REWRITTEN_POINTS`) | +15 | recording | Code written into an existing executable region, with no allocation or protection change to see |
+| Temporal | The same in a `MEM_IMAGE` region (`IMAGE_REWRITTEN_POINTS`) | +40 | recording | Inline hook or module stomping; legitimate image code is not rewritten in place |
 
 The total is capped at 100. Non-committed or non-executable regions
 short-circuit to score 0. When `head` is empty (no bytes captured, e.g. an
@@ -349,8 +357,13 @@ flowchart TD
     C2 -- no --> C3{"entropy ≥ 7.2?"}
     NOP --> C3
     C3 -- yes --> EN["+10 packed/encrypted"]
-    C3 -- no --> CAP["score = min(sum, 100)"]
-    EN --> CAP
+    C3 -- no --> R{"rewritten since previous sample?"}
+    EN --> R
+    R -- "yes, MEM_IMAGE" --> RI["+40 image code rewritten"]
+    R -- yes --> RW["+15 rewritten in place"]
+    R -- no --> CAP["score = min(sum, 100)"]
+    RI --> CAP
+    RW --> CAP
 ```
 
 ### End-to-end data flow
@@ -368,7 +381,7 @@ flowchart TD
     C --> D
     subgraph store["SQLite (WAL)"]
         D -->|per-region row| E[(region_snapshot)]
-        D -->|"if head present"| F[(region_blob)]
+        D -->|"if head present, once per distinct content"| F[(head)]
     end
     E --> G["PlaybackEngine.seek(ts)"]
     F --> H["PlaybackEngine.heads(ts)"]
@@ -385,10 +398,13 @@ that is **executable *and* readable**. Reading only the head of only the
 executable regions keeps the extra `ReadProcessMemory` cost bounded, a handful
 of small reads per tick, not a full address-space dump.
 
-**Storage**, `storage/dao.py`. `add_sample(..., heads=None)` inserts region
-rows one at a time so each captured head can be written to `region_blob` with a
-foreign key to its row. `heads_at(recording_id, ts_us)` reads them back for the
-anchored sample (same "latest at or before *T*" semantics as `regions_at`).
+**Storage**, `storage/dao.py`. `add_sample(..., heads=None)` hashes each
+captured head, inserts it into `head` if that content is new, and writes the
+hash on the region row. `heads_at(recording_id, ts_us)` reads the bytes back
+for the anchored sample (same "latest at or before *T*" semantics as
+`regions_at`), falling back to the legacy `region_blob` table for rows that
+predate hashing; `head_hashes_at` returns only the hashes, which is all the
+content-change detector needs.
 
 **Replay**, `services/playback.py`. `PlaybackEngine.heads(ts_us)` is kept
 separate from `seek()` so the latter's `(state, regions)` tuple contract is
@@ -403,15 +419,18 @@ column. On `set_regions(rows, heads)` it computes a `RegionVerdict` per row and:
 - exposes the human-readable `reasons` as the row tooltip.
 
 Live mode scores structurally (no heads); playback scores with full content
-signals from `region_blob`.
+signals from the stored heads, plus the temporal signal below.
 
 ### Threading & performance notes
 
 - All memory reads happen on the **sampler `QThread`**, consistent with the
   project rule that storage/IO stay off the GUI thread.
-- Storage cost: ≤ 256 bytes per *executable* region per tick. Bounded, but on a
-  large process over a long recording it accumulates, a natural future knob is
-  deduping identical heads or hashing instead of storing raw bytes.
+- Storage cost: 32 bytes per *executable* region per tick for the hash, plus
+  256 bytes once for each distinct head content. A region whose code does not
+  change costs nothing new after its first sample, however long the recording.
+- Each seek in playback now reads the previous sample's region list and head
+  hashes as well as the anchored sample's, so a scrub costs about three region
+  reads per step instead of one. The hashes query touches no blob content.
 - Scoring is O(head length) per region and runs on the GUI thread only at
   `set_regions` time (per seek), which is negligible.
 
@@ -435,6 +454,32 @@ NyxWatch author acknowledges apply here:
    Threat-Intelligence source sees the *allocation/protection-change event*
    itself and is far harder to evade, consistent with this doc's
    ["hard problem"](#the-hard-problem-stated-honestly) framing.
+
+### Shipped: content-change detector
+
+The first temporal signal. `analytics.rewritten_regions(prev_regions,
+prev_hashes, curr_regions, curr_hashes)` returns the base addresses of regions
+that are committed and executable in both of two consecutive samples with the
+same base, size and protection, whose captured heads both exist and whose
+hashes differ. A head missing on either side means the comparison cannot be
+made, not that the bytes changed, and a region that appeared, grew or changed
+protection is left to the allocation and transition signals.
+
+`PlaybackEngine.rewritten(ts_us)` runs it between the anchored sample and the
+one before it, and the region view passes the result into `score_region` as
+the `rewritten` flag, which adds `REWRITTEN_POINTS` (15) to a private or
+mapped region and `IMAGE_REWRITTEN_POINTS` (40) to an image region. The
+asymmetry is deliberate: JIT engines rewrite private code all day, so that
+case only nudges a region that already scores, while image code is never
+legitimately rewritten in place except by an inline hook. Forty points puts a
+bare image region that was rewritten just under the review threshold of 50:
+scored and tinted, so the analyst sees it, but not filling the review band
+with the hooks an EDR legitimately places in `ntdll` on every process.
+
+This is the detector the Trovent write-up in RESEARCH_NOTES.md motivates: an
+injector that overwrites an existing RWX region never allocates and never flips
+a protection, so the changed bytes are the only trace it leaves. Live mode does
+not run it yet; it needs two samples, and the live view has one.
 
 ### Planned: temporal RW→RX transition detector
 

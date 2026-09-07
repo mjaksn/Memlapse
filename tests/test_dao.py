@@ -118,3 +118,65 @@ def test_heads_at_uses_latest_sample_before(dao, sample_regions):
     dao.add_sample(rid, 2_000, _state(2_000), sample_regions, {0x10000: b"new"})
     assert dao.heads_at(rid, 1_500) == {0x10000: b"old"}
     assert dao.heads_at(rid, 9_999) == {0x10000: b"new"}
+
+
+# --- head deduplication, hashes and sample anchors -------------------------
+from memlapse.analytics import head_hash  # noqa: E402
+
+
+def _head_rows(dao):
+    return dao.conn.execute("SELECT COUNT(*) FROM head").fetchone()[0]
+
+
+def test_add_sample_stores_each_distinct_head_once(dao, sample_regions):
+    rid = dao.create_recording(1000, "p", 0)
+    dao.add_sample(rid, 1_000, _state(1_000), sample_regions, {0x10000: b"same"})
+    dao.add_sample(rid, 2_000, _state(2_000), sample_regions,
+                   {0x10000: b"same", 0x20000: b"other"})
+    # Two distinct contents across three captured heads: two rows, not three.
+    assert _head_rows(dao) == 2
+    assert dao.heads_at(rid, 1_000) == {0x10000: b"same"}
+    assert dao.heads_at(rid, 2_000) == {0x10000: b"same", 0x20000: b"other"}
+
+
+def test_head_hashes_at_maps_base_to_digest(dao, sample_regions):
+    rid = dao.create_recording(1000, "p", 0)
+    dao.add_sample(rid, 1_000, _state(1_000), sample_regions, {0x10000: b"MZ"})
+    assert dao.head_hashes_at(rid, 1_000) == {0x10000: head_hash(b"MZ")}
+
+
+def test_head_hashes_at_before_first_sample_is_empty(dao, sample_regions):
+    rid = dao.create_recording(1000, "p", 0)
+    dao.add_sample(rid, 5_000, _state(5_000), sample_regions, {0x10000: b"x"})
+    assert dao.head_hashes_at(rid, 1_000) == {}
+
+
+def test_sample_at_and_previous_sample_ts(dao, sample_regions):
+    rid = dao.create_recording(1000, "p", 0)
+    dao.add_sample(rid, 1_000, _state(1_000), sample_regions)
+    dao.add_sample(rid, 2_000, _state(2_000), sample_regions)
+    assert dao.sample_at(rid, 500) is None
+    assert dao.sample_at(rid, 1_500) == 1_000
+    assert dao.sample_at(rid, 2_000) == 2_000
+    assert dao.previous_sample_ts(rid, 1_000) is None
+    assert dao.previous_sample_ts(rid, 2_000) == 1_000
+    assert dao.previous_sample_ts(rid, 9_999) == 2_000
+
+
+def test_heads_at_reads_legacy_region_blob_rows(dao, sample_regions):
+    # A recording made before heads were deduplicated: the row has no hash and
+    # its bytes sit in region_blob. It must still read back, and it must not
+    # pretend to have a hash the detector could compare.
+    rid = dao.create_recording(1000, "p", 0)
+    dao.add_sample(rid, 1_000, _state(1_000), sample_regions)
+    row_id = dao.conn.execute(
+        "SELECT id FROM region_snapshot WHERE recording_id=? AND base_addr=?",
+        (rid, 0x10000),
+    ).fetchone()[0]
+    dao.conn.execute(
+        "INSERT INTO region_blob(region_snapshot_id, content) VALUES (?, ?)",
+        (row_id, b"old"),
+    )
+    dao.conn.commit()
+    assert dao.heads_at(rid, 1_000) == {0x10000: b"old"}
+    assert dao.head_hashes_at(rid, 1_000) == {}

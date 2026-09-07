@@ -3,8 +3,9 @@
 Displays the VirtualQueryEx region list for a process and, on selection, a hex
 dump of the region's first bytes. Used in both live mode (reads memory on the
 fly via ProcessMemory) and playback mode (region map and any captured region
-heads from SQLite; the heads feed the Score column and the hex panel shows a
-fixed note, since only the first 256 bytes of executable regions are recorded).
+heads from SQLite; the heads, and the set of regions whose head changed since
+the previous sample, feed the Score column, and the hex panel shows a fixed
+note, since only the first 256 bytes of executable regions are recorded).
 """
 
 from __future__ import annotations
@@ -116,12 +117,22 @@ class RegionTableModel(QAbstractTableModel):
         return None
 
     def set_regions(self, rows: list[Region],
-                    heads: dict[int, bytes] | None = None) -> None:
+                    heads: dict[int, bytes] | None = None,
+                    rewritten: set[int] | None = None) -> None:
+        """Replace the rows and score each one.
+
+        ``heads`` carries captured bytes by base address and ``rewritten`` the
+        base addresses whose head changed since the previous sample; both are
+        empty in live mode, where only the structural signals apply.
+        """
         heads = heads or {}
+        rewritten = rewritten or set()
         self.beginResetModel()
         self._rows = rows
         self._verdicts = [
-            score_region(r, head=heads.get(r.base_addr, b"")) for r in rows
+            score_region(r, head=heads.get(r.base_addr, b""),
+                         rewritten=r.base_addr in rewritten)
+            for r in rows
         ]
         self.endResetModel()
 
@@ -211,14 +222,15 @@ class RegionView(QWidget):
 
     # --- playback mode: region map from storage, no live reads -------------
     def show_recorded_regions(self, regions: list[Region], header: str,
-                              heads: dict[int, bytes] | None = None) -> None:
+                              heads: dict[int, bytes] | None = None,
+                              rewritten: set[int] | None = None) -> None:
         self._pid = None
         self._live = False
         # Invalidate any in-flight live enumeration so it can't overwrite the
         # recorded map when it finishes.
         self._load_seq += 1
         self._pending = None
-        self.model.set_regions(regions, heads)
+        self.model.set_regions(regions, heads, rewritten)
         self.header.setText(header)
         self.hex.setPlainText(
             "(hex preview is live only; a recording keeps the first 256 bytes of "

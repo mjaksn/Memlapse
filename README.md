@@ -19,7 +19,9 @@ later phases.
 - **Phase 6**, injection heuristics: each executable region gets a 0 to 100
   score (unbacked private or mapped executable memory, RWX, PE header, NOP
   sled, high entropy) shown as a Score column with a heat tint and a reason
-  tooltip in the region view.
+  tooltip in the region view. In playback the score also rises for a region
+  whose code was rewritten in place since the previous sample, the trace an
+  injector leaves when it overwrites executable memory that already exists.
 
 - **Dashboard**, a vivid, near-live overview tab: system RAM/swap gauges, a
   scrolling usage timeline, a heat-ranked top-process list (click to drill into

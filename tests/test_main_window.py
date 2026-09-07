@@ -243,3 +243,31 @@ def test_close_event_stops_everything(main_window):
     win.close()
     assert not win.collector.started_flag
     assert not win.system_collector.started_flag
+
+
+# --- playback seeks carry the content-change detector into the region view ---
+from memlapse.model.region import (  # noqa: E402
+    MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+)
+
+
+def test_playback_seek_scores_rewritten_regions(main_window):
+    from PySide6.QtCore import Qt
+    win, db = main_window
+    exec_region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    conn = connect(db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 1_000)
+    dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 100, 50, 3), [exec_region],
+                   {0x40000: b"aaa"})
+    dao.add_sample(rid, 2_000, ProcState(2_000, 1000, 100, 50, 3), [exec_region],
+                   {0x40000: b"bbb"})
+    dao.end_recording(rid, 3_000)
+    conn.close()
+
+    win._open_recording(rid)
+    model = win.region_view.model
+    win._on_seek(2_000)  # bytes changed since the sample before: 50 + 15
+    assert model.data(model.index(0, 5), Qt.DisplayRole) == "65"
+    win._on_seek(1_000)  # first sample has nothing to compare with: 50
+    assert model.data(model.index(0, 5), Qt.DisplayRole) == "50"
