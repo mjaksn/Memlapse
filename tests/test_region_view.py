@@ -333,3 +333,110 @@ def test_show_recorded_regions_passes_unpacked_through(view):
     view.show_recorded_regions([region], "Recording #1", None, None, None,
                                {0x40000})
     assert view.model.data(view.model.index(0, 5), Qt.DisplayRole) == "70"
+
+
+# --- saving a region's bytes -----------------------------------------------
+def _dialog(monkeypatch, path):
+    """Patch the save dialog to answer with ``path`` (empty means cancelled)."""
+    monkeypatch.setattr(region_view_mod.QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (path, "")))
+
+
+def test_save_region_writes_the_bytes(qtbot, view, sample_regions, monkeypatch,
+                                      tmp_path):
+    whole = b"A" * 4096  # the first sample region is 4096 bytes
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=whole))
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)
+    target = tmp_path / "region.bin"
+    _dialog(monkeypatch, str(target))
+    view.save_selected_region()
+    assert target.read_bytes() == whole
+    assert view.header.text() == "saved 4.0K from 0x000000010000"
+
+
+def test_save_region_reports_a_short_read(qtbot, view, sample_regions,
+                                          monkeypatch, tmp_path):
+    """The target gave back less than the region holds, which is its doing."""
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=b"PAYLOAD"))
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)
+    target = tmp_path / "region.bin"
+    _dialog(monkeypatch, str(target))
+    view.save_selected_region()
+    assert target.read_bytes() == b"PAYLOAD"
+    assert "short read of 4.0K" in view.header.text()
+
+
+def test_save_region_reports_the_cap(qtbot, view, sample_regions, monkeypatch,
+                                     tmp_path):
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=b"12345678"))
+    monkeypatch.setattr(region_view_mod, "REGION_DUMP_MAX", 8)
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)  # a 4096-byte region
+    target = tmp_path / "region.bin"
+    _dialog(monkeypatch, str(target))
+    view.save_selected_region()
+    assert len(target.read_bytes()) == 8
+    assert "capped at 8B" in view.header.text()
+
+
+def test_save_region_without_a_selection(view, monkeypatch, tmp_path):
+    _dialog(monkeypatch, str(tmp_path / "unused.bin"))
+    view.save_selected_region()
+    assert "Select a region first" in view.header.text()
+    assert not (tmp_path / "unused.bin").exists()
+
+
+def test_save_region_is_refused_in_playback(view, sample_regions, monkeypatch,
+                                            tmp_path):
+    view.show_recorded_regions(sample_regions, "Recording #1")
+    view.table.selectRow(0)
+    _dialog(monkeypatch, str(tmp_path / "unused.bin"))
+    view.save_selected_region()
+    assert "live only" in view.header.text()
+    assert not (tmp_path / "unused.bin").exists()
+
+
+def test_save_region_cancelled_writes_nothing(qtbot, view, sample_regions,
+                                              monkeypatch):
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=b"X"))
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)
+    header = view.header.text()
+    _dialog(monkeypatch, "")
+    view.save_selected_region()
+    assert view.header.text() == header  # nothing happened, nothing reported
+
+
+def test_save_region_read_failure_and_empty_read(qtbot, view, sample_regions,
+                                                 monkeypatch, tmp_path):
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=b"X"))
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)
+    target = tmp_path / "region.bin"
+    _dialog(monkeypatch, str(target))
+
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=b""))
+    view.save_selected_region()
+    assert "nothing readable" in view.header.text()
+    assert not target.exists()
+
+    class Boom:
+        def __init__(self, *a, **k):
+            raise ProcessAccessError("gone")
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", Boom)
+    view.save_selected_region()
+    assert "save failed" in view.header.text()
+    assert not target.exists()

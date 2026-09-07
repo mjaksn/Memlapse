@@ -13,12 +13,15 @@ query on the pool thread, playback from what the recording stored.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import (
     QAbstractTableModel, QModelIndex, QObject, QRunnable, Qt, QThreadPool, Signal,
 )
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QAction, QColor, QFont
 from PySide6.QtWidgets import (
-    QLabel, QPlainTextEdit, QSplitter, QTableView, QVBoxLayout, QWidget,
+    QFileDialog, QLabel, QPlainTextEdit, QSplitter, QTableView, QVBoxLayout,
+    QWidget,
 )
 
 from ..analytics import RegionVerdict, regions_with_thread_starts, score_region
@@ -30,6 +33,11 @@ from .theme import heat_color
 
 #: How many bytes to read for the hex preview of a selected region.
 HEX_PREVIEW_BYTES = 512
+
+#: Most bytes one "save region bytes" writes. A region can be gigabytes, and
+#: the point of the action is to hand a payload to a disassembler or a YARA
+#: rule, not to mirror an address space. A truncated save says so.
+REGION_DUMP_MAX = 16 * 1024 * 1024
 
 
 class _RegionLoadSignals(QObject):
@@ -184,6 +192,12 @@ class RegionView(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.selectionModel().currentRowChanged.connect(self._on_region_selected)
+        # Right-click a row to keep its bytes. Live only: a recording holds
+        # the first 256 bytes of executable regions, which is not a dump.
+        self.save_action = QAction("Save region bytes\u2026", self)
+        self.save_action.triggered.connect(self.save_selected_region)
+        self.table.setContextMenuPolicy(Qt.ActionsContextMenu)
+        self.table.addAction(self.save_action)
         # Clearing the region list should not leave a stale hex dump behind
         # (e.g. when switching back to Live mode).
         self.model.modelReset.connect(self._on_model_reset)
@@ -281,3 +295,53 @@ class RegionView(QWidget):
             self.hex.setPlainText(f"read failed: {exc}")
             return
         self.hex.setPlainText(hexdump(data, region.base_addr))
+
+    # --- evidence: keep a region's bytes -----------------------------------
+    def save_selected_region(self) -> None:
+        """Write the selected region's bytes to a file the analyst chooses.
+
+        The header carries the outcome, since this view has no status bar of
+        its own and the analyst just asked for the thing being reported. Live
+        mode only: playback stores the first 256 bytes of executable regions
+        for scoring, which would make a misleading dump.
+        """
+        region = self.model.region_at(self.table.currentIndex().row())
+        if region is None:
+            self.header.setText("Select a region first, then save its bytes.")
+            return
+        if not self._live or self._pid is None:
+            self.header.setText(
+                "Saving bytes is live only; a recording keeps 256 bytes a region."
+            )
+            return
+        path, _filter = QFileDialog.getSaveFileName(
+            self, "Save region bytes",
+            f"{self._pid}-{region.base_addr:012x}.bin", "Raw bytes (*.bin)",
+        )
+        if not path:
+            return  # cancelled
+        wanted = min(region.size, REGION_DUMP_MAX)
+        try:
+            with ProcessMemory(self._pid) as pm:
+                data = pm.read(region.base_addr, wanted)
+        except ProcessAccessError as exc:
+            self.header.setText(f"save failed: {exc}")
+            return
+        if not data:
+            self.header.setText(
+                f"0x{region.base_addr:012x}: nothing readable to save"
+            )
+            return
+        Path(path).write_bytes(data)
+        # A short save has two different causes and the analyst needs to know
+        # which: the cap is our decision, a short read is the target's.
+        if region.size > REGION_DUMP_MAX:
+            note = (f", capped at {_fmt_size(REGION_DUMP_MAX)} of "
+                    f"{_fmt_size(region.size)}")
+        elif len(data) < region.size:
+            note = f", short read of {_fmt_size(region.size)}"
+        else:
+            note = ""
+        self.header.setText(
+            f"saved {_fmt_size(len(data))} from 0x{region.base_addr:012x}{note}"
+        )

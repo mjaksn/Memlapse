@@ -41,7 +41,8 @@ Next: per-thread memory activity via ETW (Phase 5).
 1. Open the **Forensic Monitor** tab (the app starts on the Dashboard; clicking
    a process bar there also jumps to the monitor), then select a process (left)
    to inspect its live memory map (right).
-2. Click **● Record** to sample it over time; **■ Stop** when done.
+2. Click **● Record** to sample it over time; **■ Stop** when done. Right-click
+   a region to save its bytes for a disassembler or a YARA rule.
 3. **Open Recording ▾** → pick a recording to enter playback, then drag the
    timeline (or press ▶) to replay it. **Live** returns to real-time mode.
 

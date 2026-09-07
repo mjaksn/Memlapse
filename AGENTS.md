@@ -59,7 +59,7 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 255 passed with 100 percent line and branch
+(2026-09-06); the test run is 303 passed with 100 percent line and branch
 coverage (2026-09-07).
 
 ## Conventions

@@ -318,7 +318,7 @@ motivation.
 
 ## 4. Data model, export and evidence handling
 
-### 4.1 Dump a region or a process to a file. New
+### 4.1 Dump a region or a process to a file. Part shipped
 
 **Source.** The incident workflow dumps "suspicious process memory for further
 analysis" with `windows.memmap --pid 1234 --dump` and captures a full memory
@@ -330,6 +330,14 @@ step 2].
 for the process (`MiniDumpWriteDump` with full memory) would hand evidence to
 YARA, a disassembler or Volatility without a second tool. Both are one
 `ReadProcessMemory` loop or one API call away from what exists.
+
+**Status.** Half shipped. Right-clicking a region in live mode offers "Save
+region bytes", which writes up to `REGION_DUMP_MAX` (16 MB) of it and says
+in the header when the cap truncated the save. Playback refuses, because a
+recording holds 256 bytes a region and a file made from that would look like
+a dump without being one. The process minidump is not written: it needs
+`MiniDumpWriteDump` from dbghelp, which is a new dependency and a much
+larger artefact than anything the tool produces today.
 
 ### 4.2 Snapshot on alert. New
 

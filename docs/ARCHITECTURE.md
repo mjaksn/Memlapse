@@ -439,6 +439,11 @@ content-change detector needs.
 separate from `seek()` so the latter's `(state, regions)` tuple contract is
 unchanged.
 
+The region view also offers **Save region bytes** on a right-click in live
+mode, which writes up to `REGION_DUMP_MAX` of the selected region so the
+payload can go to a disassembler or a YARA rule (RESEARCH_NOTES.md 4.1).
+It is a read, like everything else here.
+
 **Surface**, `ui/region_view.py`. `RegionTableModel` gained a **Score**
 column. On `set_regions(rows, heads)` it computes a `RegionVerdict` per row and:
 
