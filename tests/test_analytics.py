@@ -209,3 +209,88 @@ def test_score_region_caps_at_100():
 
 def test_entropy_packed_threshold_is_below_max():
     assert 0.0 < ENTROPY_PACKED < 8.0
+
+
+# --- head_hash / rewritten_regions -----------------------------------------
+import hashlib  # noqa: E402
+
+from memlapse.analytics import (  # noqa: E402
+    IMAGE_REWRITTEN_POINTS, REWRITTEN_POINTS, head_hash, rewritten_regions,
+)
+from memlapse.model.region import (  # noqa: E402
+    MEM_COMMIT as _COMMIT, MEM_IMAGE as _IMAGE, MEM_PRIVATE as _PRIVATE,
+    MEM_RESERVE as _RESERVE, PAGE_EXECUTE_READ as _RX, PAGE_READWRITE as _RW,
+    Region as _Region,
+)
+
+
+def test_head_hash_is_sha256_digest():
+    assert head_hash(b"MZ") == hashlib.sha256(b"MZ").digest()
+    assert len(head_hash(b"")) == 32
+
+
+def _snap(protect=_RX, type=_PRIVATE, size=4096, state=_COMMIT, base=0x1000):
+    return _Region(base, size, state, protect, type)
+
+
+def test_rewritten_regions_flags_changed_hash_with_same_shape():
+    found = rewritten_regions([_snap()], {0x1000: b"a"}, [_snap()], {0x1000: b"b"})
+    assert found == {0x1000}
+
+
+def test_rewritten_regions_ignores_equal_hash():
+    assert rewritten_regions([_snap()], {0x1000: b"a"}, [_snap()], {0x1000: b"a"}) == set()
+
+
+def test_rewritten_regions_needs_a_hash_on_both_sides():
+    assert rewritten_regions([_snap()], {}, [_snap()], {0x1000: b"b"}) == set()
+    assert rewritten_regions([_snap()], {0x1000: b"a"}, [_snap()], {}) == set()
+
+
+def test_rewritten_regions_ignores_region_that_just_appeared():
+    assert rewritten_regions([], {}, [_snap()], {0x1000: b"b"}) == set()
+
+
+def test_rewritten_regions_ignores_size_change():
+    found = rewritten_regions([_snap(size=4096)], {0x1000: b"a"},
+                              [_snap(size=8192)], {0x1000: b"b"})
+    assert found == set()
+
+
+def test_rewritten_regions_ignores_protection_change():
+    # RW to RX with new bytes is the transition detector's case, not this one.
+    found = rewritten_regions([_snap(protect=_RW)], {0x1000: b"a"},
+                              [_snap(protect=_RX)], {0x1000: b"b"})
+    assert found == set()
+
+
+def test_rewritten_regions_ignores_non_executable_and_reserved():
+    assert rewritten_regions([_snap(protect=_RW)], {0x1000: b"a"},
+                             [_snap(protect=_RW)], {0x1000: b"b"}) == set()
+    assert rewritten_regions([_snap(state=_RESERVE)], {0x1000: b"a"},
+                             [_snap(state=_RESERVE)], {0x1000: b"b"}) == set()
+
+
+def test_rewritten_regions_checks_each_region_independently():
+    prev = [_snap(base=0x1000), _snap(base=0x2000)]
+    curr = [_snap(base=0x1000), _snap(base=0x2000)]
+    found = rewritten_regions(prev, {0x1000: b"a", 0x2000: b"c"},
+                              curr, {0x1000: b"b", 0x2000: b"c"})
+    assert found == {0x1000}
+
+
+def test_score_region_rewritten_private_adds_points():
+    v = score_region(_snap(), rewritten=True)
+    assert v.score == 50 + REWRITTEN_POINTS
+    assert any("rewritten since previous sample" in r for r in v.reasons)
+
+
+def test_score_region_rewritten_image_weighs_more():
+    v = score_region(_snap(type=_IMAGE), rewritten=True)
+    assert v.score == IMAGE_REWRITTEN_POINTS
+    assert v.reasons == ("image code rewritten in memory (inline hook or module stomping)",)
+
+
+def test_score_region_rewritten_ignored_for_non_executable():
+    v = score_region(_snap(protect=_RW), rewritten=True)
+    assert v.score == 0 and v.reasons == ()

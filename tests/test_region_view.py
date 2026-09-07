@@ -232,3 +232,24 @@ def test_clearing_regions_clears_hex(qtbot, view, sample_regions, monkeypatch):
     # Emptying the model deselects -> hex is cleared.
     view.model.set_regions([])
     assert view.hex.toPlainText() == ""
+
+
+# --- rewritten regions feed the Score column ---------------------------------
+def _exec_private(base=0x40000):
+    from memlapse.model.region import MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region
+    return Region(base, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+
+
+def test_region_model_rewritten_adds_points(rmodel):
+    from PySide6.QtCore import Qt
+    rmodel.set_regions([_exec_private()], None, {0x40000})
+    assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == "65"  # 50 + 15 rewritten
+    rmodel.set_regions([_exec_private()], None, {0x99999})  # some other region changed
+    assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == "50"
+
+
+def test_show_recorded_regions_passes_rewritten_through(view):
+    from PySide6.QtCore import Qt
+    view.show_recorded_regions([_exec_private()], "Recording #1", None, {0x40000})
+    assert view.model.data(view.model.index(0, 5), Qt.DisplayRole) == "65"
+    assert "rewritten" in view.model.data(view.model.index(0, 5), Qt.ToolTipRole)

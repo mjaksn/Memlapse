@@ -8,6 +8,7 @@ spikes, and a top-movers diff.
 
 from __future__ import annotations
 
+import hashlib
 import math
 from collections import Counter, deque
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from typing import Sequence
 
 from .model.region import (
     MEM_COMMIT,
+    MEM_IMAGE,
     MEM_MAPPED,
     MEM_PRIVATE,
     PAGE_EXECUTE,
@@ -153,6 +155,12 @@ _WRITE_EXEC = PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY
 ENTROPY_PACKED = 7.2
 #: minimum run of 0x90 bytes to count as a shellcode NOP sled.
 NOP_SLED_MIN = 16
+#: points for an executable region whose head bytes changed between samples
+#: while its protection and size did not (see :func:`rewritten_regions`).
+REWRITTEN_POINTS = 15
+#: the same, for an image-backed region. Legitimate code is not rewritten in
+#: place; an inline hook or module stomping is, so this carries more weight.
+IMAGE_REWRITTEN_POINTS = 40
 
 
 def is_executable(protect: int) -> bool:
@@ -170,6 +178,15 @@ def shannon_entropy(data: bytes) -> float:
         return 0.0
     n = len(data)
     return -sum((c / n) * math.log2(c / n) for c in Counter(data).values())
+
+
+def head_hash(data: bytes) -> bytes:
+    """SHA-256 digest of a captured region head, the key it is stored under.
+
+    Thirty-two bytes that identify the content exactly, so equal heads share
+    one row and a changed head is a changed hash.
+    """
+    return hashlib.sha256(data).digest()
 
 
 def longest_nop_run(data: bytes) -> int:
@@ -196,12 +213,16 @@ class RegionVerdict:
         return self.score > 0
 
 
-def score_region(region: Region, *, head: bytes = b"") -> RegionVerdict:
+def score_region(region: Region, *, head: bytes = b"",
+                 rewritten: bool = False) -> RegionVerdict:
     """Heuristic injection score for a single region.
 
     ``head`` is the first bytes of the region (from ReadProcessMemory) when
-    available; pass ``b""`` to run structural checks only. Scores are additive
-    and capped at 100. A non-executable or non-committed region always scores 0.
+    available; pass ``b""`` to run structural checks only. ``rewritten`` says
+    the head changed since the previous sample with the region otherwise
+    unchanged, which only a recording can know (see :func:`rewritten_regions`).
+    Scores are additive and capped at 100. A non-executable or non-committed
+    region always scores 0.
     """
     if region.state != MEM_COMMIT or not is_executable(region.protect):
         return RegionVerdict(region.base_addr, region.size, 0, ())
@@ -233,6 +254,50 @@ def score_region(region: Region, *, head: bytes = b"") -> RegionVerdict:
         score += 10
         reasons.append("high entropy (packed/encrypted)")
 
+    # Temporal: the bytes changed but nothing about the region did. A loader
+    # that overwrites an existing executable region never allocates and never
+    # flips a protection, so this is the only signal it leaves. JIT engines
+    # rewrite private code legitimately; image code is not rewritten at all.
+    if rewritten:
+        if region.type == MEM_IMAGE:
+            score += IMAGE_REWRITTEN_POINTS
+            reasons.append(
+                "image code rewritten in memory (inline hook or module stomping)"
+            )
+        else:
+            score += REWRITTEN_POINTS
+            reasons.append("executable memory rewritten since previous sample")
+
     return RegionVerdict(
         region.base_addr, region.size, min(score, 100), tuple(reasons)
     )
+
+
+def rewritten_regions(prev_regions: Sequence[Region],
+                      prev_hashes: dict[int, bytes],
+                      curr_regions: Sequence[Region],
+                      curr_hashes: dict[int, bytes]) -> set[int]:
+    """Base addresses of executable regions rewritten between two samples.
+
+    A region counts when it is committed and executable in both samples with
+    the same base, size and protection, both samples captured its head, and
+    the two hashes differ. Anything else is not this detector's business: a
+    region that appeared, grew, or changed protection belongs to the
+    allocation and transition signals, and a head missing on either side
+    means the comparison cannot be made, not that the bytes changed.
+    """
+    before = {r.base_addr: r for r in prev_regions}
+    changed: set[int] = set()
+    for curr in curr_regions:
+        prev = before.get(curr.base_addr)
+        if prev is None:
+            continue
+        if (prev.size, prev.protect, prev.state) != (curr.size, curr.protect, curr.state):
+            continue
+        if curr.state != MEM_COMMIT or not is_executable(curr.protect):
+            continue
+        old, new = prev_hashes.get(curr.base_addr), curr_hashes.get(curr.base_addr)
+        if old is None or new is None or old == new:
+            continue
+        changed.add(curr.base_addr)
+    return changed

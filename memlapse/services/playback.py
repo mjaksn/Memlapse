@@ -3,11 +3,12 @@
 Holds a read-only Dao on the UI thread (a separate SQLite connection from the
 sampler's; WAL makes concurrent read+write safe). Given a target time it
 returns the process state and region map from the latest sample at or before
-that time.
+that time, and can compare that sample with the one before it.
 """
 
 from __future__ import annotations
 
+from ..analytics import rewritten_regions
 from ..storage import connect
 from ..storage.dao import Dao, ProcState, RecordingRow
 from ..model.region import Region
@@ -45,6 +46,29 @@ class PlaybackEngine:
         if self.recording_id is None:
             return {}
         return self._dao.heads_at(self.recording_id, ts_us)
+
+    def rewritten(self, ts_us: int) -> set[int]:
+        """Base addresses of executable regions rewritten since the previous sample.
+
+        Compares the head hashes of the sample at or before ``ts_us`` with
+        those of the sample before it (see :func:`analytics.rewritten_regions`).
+        Empty when nothing is open, at the first sample, or when no head
+        changed. Like :meth:`heads`, separate from :meth:`seek` on purpose.
+        """
+        if self.recording_id is None:
+            return set()
+        anchor = self._dao.sample_at(self.recording_id, ts_us)
+        if anchor is None:
+            return set()
+        previous = self._dao.previous_sample_ts(self.recording_id, anchor)
+        if previous is None:
+            return set()
+        return rewritten_regions(
+            self._dao.regions_at(self.recording_id, previous),
+            self._dao.head_hashes_at(self.recording_id, previous),
+            self._dao.regions_at(self.recording_id, anchor),
+            self._dao.head_hashes_at(self.recording_id, anchor),
+        )
 
     def close(self) -> None:
         self._conn.close()

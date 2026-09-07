@@ -150,7 +150,7 @@ both views, but it is nearly free to implement on top of the existing collector.
 Recording is what Memlapse has that a snapshot tool does not. Each entry here
 is a detector that only exists because consecutive samples can be compared.
 
-### 2.1 Content changes in a region whose protection never changes. New
+### 2.1 Content changes in a region whose protection never changes. Shipped
 
 **Source.** The Trovent technique overwrites an RWX region that already exists,
 so there is no allocation and no protection change to observe; the region's
@@ -164,6 +164,13 @@ space) makes a second temporal rule almost free: an executable region whose
 head hash changes between samples while its protection and size stay the same
 is being rewritten. Legitimate JIT code also does this, so the rule should feed
 the score rather than raise an alert on its own.
+
+**Status.** Implemented: heads are stored once per distinct content under
+their SHA-256 hash, and playback compares consecutive samples with
+`analytics.rewritten_regions`, adding 15 points to a rewritten private or
+mapped region and 40 to a rewritten image region, where the benign
+explanation is rarer but includes an EDR's own hooks, which is why 40 sits
+just under the review threshold. See the scoring table in ARCHITECTURE.md.
 
 ### 2.2 Watch protection changes. Corroborates
 
