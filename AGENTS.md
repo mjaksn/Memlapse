@@ -84,10 +84,10 @@ packages; the test run is 228 passed with 100 percent line and branch coverage.
 
 ## Testing
 
-- Tests live in `tests/`, broadly one `test_<module>.py` per module (the model
-  dataclasses share `test_model.py`, the system collector and a few helpers have extra
-  files of their own), with shared fixtures and fakes in `tests/conftest.py`
-  (`make_process`, `make_region`, `FakeSampler`, ...).
+- Tests live in `tests/`, broadly one `test_<module>.py` per module (the process and
+  region dataclasses share `test_model.py`, the system collector and a few helpers
+  have extra files of their own), with shared fixtures and fakes in
+  `tests/conftest.py` (`make_process`, `make_region`, `FakeSampler`, ...).
 - `pyproject.toml` runs coverage on every `pytest` invocation with `fail_under = 100`
   and branch coverage on. A change that lowers coverage fails the run; add a test or, for
   a genuinely unreachable line, a `# pragma: no cover` with a reason.
