@@ -37,6 +37,10 @@ HISTORY = 600          # samples retained (~10 min at 1 Hz)
 TOP_N = 8              # process bars shown
 LEAK_WARN_PER_MIN = 5 * 1024 * 1024   # 5 MB/min triggers a climbing/falling note
 ANOMALY_Z = 3.0
+#: Samples needed before the strip states a leak rate or an anomaly. A least
+#: squares slope through three points, or a z-score over three, is a number
+#: rather than a finding; saying what is still missing is more use than that.
+MIN_INSIGHT_SAMPLES = 30
 
 
 def _fmt_bytes(n: float) -> str:
@@ -268,6 +272,14 @@ class DashboardView(QWidget):
     def _refresh_insight(self) -> None:
         times = self._used.times()
         used = self._used.values()
+        if len(used) < MIN_INSIGHT_SAMPLES:
+            self.insight.setText(
+                f"● collecting baseline, {len(used)} of "
+                f"{MIN_INSIGHT_SAMPLES} samples"
+            )
+            self.insight.setStyleSheet(f"color: {theme.MUTED}; font-size: 12px;")
+            self.ram_gauge.set_alert(False)
+            return
         per_min = leak_rate_bytes_per_sec(times[-60:], used[-60:]) * 60
         z = zscore(self._percent.values()[-120:])
 

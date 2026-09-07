@@ -558,7 +558,10 @@ storing both on the event avoids the same confusion.
 NOT_ENOUGH_BASELINE when they "could not report events because the baseline
 size was insufficient for event detection" [V, p. 214]. The dashboard's
 z-score spikes and least-squares leak rate should do the same instead of
-presenting a confident number from three points.
+presenting a confident number from three points. **Shipped:** the interpret
+strip reads "collecting baseline, N of 30 samples" until
+`MIN_INSIGHT_SAMPLES` have arrived, and states no rate or anomaly before
+then.
 
 **Statistics propose, rules confirm. Refines.** The traffic analytics engine
 "combines ML-driven behavior modeling with rule-based analytics" because "not
@@ -623,8 +626,10 @@ long recordings could downsample old samples the same way.
 events by category, and the sensor separates "Packets Dropped", meaning
 overwhelmed, from bypassed, meaning deliberately skipped [V, p. 214, p. 537].
 Memlapse's latest-only delivery discards intermediate samples by design;
-counting and showing skipped samples per collector makes that honest. The
-`skipped` counter in `collectors/base.py` exists; it is not yet surfaced.
+counting and showing skipped samples per collector makes that honest.
+**Shipped:** the `skipped` counter in `collectors/base.py` now reaches the
+status bar, which reads "N processes, M polls dropped" whenever M is above
+zero.
 
 **State your limits and warn at 90 percent. New.** The product publishes
 numeric ceilings (events per window, rows displayed, file size analysed) and

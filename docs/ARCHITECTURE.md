@@ -99,7 +99,9 @@ Two more rules keep the GUI thread responsive, both learned the hard way:
   that emits faster than the GUI consumes builds an unbounded backlog and the
   window eventually freezes. `collectors/base.py` only emits a snapshot once
   the previous one has been dequeued on the GUI thread and drops the poll
-  otherwise (`skipped` counts them).
+  otherwise (`skipped` counts them). The count is shown in the status bar as
+  soon as it is non-zero, because a design that discards data quietly is
+  indistinguishable from one that loses it (RESEARCH_NOTES.md 7.4).
 - **Keep the GIL free while the GUI works.** Qt's model/view calls back into
   Python thousands of times per refresh (`data()` for sorting, filtering and
   painting), and each callback must take the GIL. A collector that spends most

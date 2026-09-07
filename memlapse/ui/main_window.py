@@ -136,7 +136,11 @@ class MainWindow(QMainWindow):
     def _on_processes(self, rows: list[ProcessInfo]) -> None:
         if self._mode == "live":
             self.process_view.update_processes(rows)
-            self._status_label.setText(f"{len(rows)} processes")
+            # Latest-only delivery drops a poll when the GUI is still busy
+            # with the last one. Counting them is only honest if it shows.
+            dropped = self.collector.skipped
+            note = f", {dropped} polls dropped" if dropped else ""
+            self._status_label.setText(f"{len(rows)} processes{note}")
 
     def _on_process_selected(self, pid: int, name: str) -> None:
         self._selected_pid = pid

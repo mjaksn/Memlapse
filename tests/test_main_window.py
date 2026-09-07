@@ -271,3 +271,14 @@ def test_playback_seek_scores_rewritten_regions(main_window):
     assert model.data(model.index(0, 5), Qt.DisplayRole) == "65"
     win._on_seek(1_000)  # first sample has nothing to compare with: 50
     assert model.data(model.index(0, 5), Qt.DisplayRole) == "50"
+
+
+# --- dropped polls are surfaced, not swallowed -----------------------------
+def test_status_bar_reports_dropped_polls(main_window, make_process):
+    win, _ = main_window
+    win.collector.skipped = 3
+    win.collector.updated.emit([make_process(pid=1)])
+    assert "3 polls dropped" in win._status_label.text()
+    win.collector.skipped = 0
+    win.collector.updated.emit([make_process(pid=1)])
+    assert "dropped" not in win._status_label.text()

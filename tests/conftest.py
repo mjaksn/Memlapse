@@ -95,6 +95,7 @@ class FakeCollector(QObject):
         super().__init__(parent)
         self.interval = interval
         self.started_flag = False
+        self.skipped = 0  # the real collector counts dropped polls here
 
     def start(self):
         self.started_flag = True
