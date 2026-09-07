@@ -169,8 +169,9 @@ the score rather than raise an alert on its own.
 their SHA-256 hash, and playback compares consecutive samples with
 `analytics.rewritten_regions`, adding 15 points to a rewritten private or
 mapped region and 40 to a rewritten image region, where the benign
-explanation is rarer but includes an EDR's own hooks, which is why 40 sits
-just under the review threshold. See the scoring table in ARCHITECTURE.md.
+explanation is rarer but includes an EDR's own hooks, which is why 40 lands
+in the review band rather than the likely-injection one. See the scoring
+table in ARCHITECTURE.md.
 
 ### 2.2 Watch protection changes. Corroborates
 
@@ -476,7 +477,9 @@ malicious file events (scoring 30 or above) are sent to Network Detection and
 Response" [V, p. 458, p. 486]. Memlapse's review threshold of 50 hides a band
 the product considers worth a second look. A three-band display (with 30 as
 the floor of "review") costs nothing and matches the additive scale already in
-use.
+use. **Shipped:** `RegionVerdict.band` returns low, review or likely
+injection from `REVIEW_SCORE` (30) and `LIKELY_SCORE` (75), and the band
+leads the region tooltip.
 
 **Separate confidence from severity. New.** Impact "is initially Confidence *
 Severity / 100" [V, p. 513]; severity is a property of the threat type,

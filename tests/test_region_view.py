@@ -253,3 +253,16 @@ def test_show_recorded_regions_passes_rewritten_through(view):
     view.show_recorded_regions([_exec_private()], "Recording #1", None, {0x40000})
     assert view.model.data(view.model.index(0, 5), Qt.DisplayRole) == "65"
     assert "rewritten" in view.model.data(view.model.index(0, 5), Qt.ToolTipRole)
+
+
+# --- the tooltip leads with the triage band --------------------------------
+def test_tooltip_starts_with_the_band(rmodel):
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    rmodel.set_regions([Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ,
+                               MEM_PRIVATE)])
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert tip.startswith("review: ")  # 50 points
+    assert "unbacked" in tip

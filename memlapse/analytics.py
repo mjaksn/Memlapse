@@ -155,6 +155,13 @@ _WRITE_EXEC = PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY
 ENTROPY_PACKED = 7.2
 #: minimum run of 0x90 bytes to count as a shellcode NOP sled.
 NOP_SLED_MIN = 16
+#: Score at or above which a region is worth a second look, and the score at
+#: which it is worth acting on. Three bands rather than one threshold: the
+#: lower edge is deliberately low, because a signal that scores 30 and is
+#: never shown as anything but a number is a signal nobody triages.
+REVIEW_SCORE = 30
+LIKELY_SCORE = 75
+
 #: MITRE ATT&CK technique each reason maps to, appended to the reason string
 #: so a tooltip and an export both name the technique the same way. Signals
 #: with no honest mapping carry none.
@@ -218,6 +225,21 @@ class RegionVerdict:
     @property
     def suspicious(self) -> bool:
         return self.score > 0
+
+    @property
+    def band(self) -> str:
+        """Triage band: "", "low", "review" or "likely injection".
+
+        The empty string is for a region that scored nothing at all, which
+        is most of them. "low" is a region that tripped something without
+        reaching :data:`REVIEW_SCORE`: still shown, still tinted, but not
+        asking for the analyst's time.
+        """
+        if self.score >= LIKELY_SCORE:
+            return "likely injection"
+        if self.score >= REVIEW_SCORE:
+            return "review"
+        return "low" if self.score > 0 else ""
 
 
 def score_region(region: Region, *, head: bytes = b"",

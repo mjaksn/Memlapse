@@ -340,8 +340,22 @@ Supporting helpers, all pure and unit-tested (`tests/test_analytics.py`):
 - `shannon_entropy(data)`, `H = -Σ pᵢ·log₂ pᵢ`, in bits/byte (0.0 to 8.0).[^entropy]
 - `longest_nop_run(data)`, longest run of `0x90`.
 
-Suggested triage thresholds (tune against a JIT-heavy baseline, see
-Limitations): **≥ 50 = review, ≥ 75 = likely injection.**
+Every scored region falls in one of three bands (tune them against a
+JIT-heavy baseline, see Limitations), and the band leads the tooltip because
+a bare number does not tell an analyst what to do with it:
+
+| Band | Score | What it means |
+|---|---:|---|
+| low | 1 to 29 | Something tripped, not enough to spend time on. Shown and tinted all the same. |
+| review | `REVIEW_SCORE` = 30 to 74 | Worth a second look. Most JIT and EDR artefacts land here. |
+| likely injection | `LIKELY_SCORE` = 75 and above | Act on it. |
+
+The lower edge is 30 rather than 50 on the reasoning in RESEARCH_NOTES.md
+7.1: a commercial platform treats 30 as the point where a detection is worth
+forwarding, and a band that starts at 50 leaves the single-signal findings
+between them looking identical to noise. Three bands cost nothing on an
+additive scale that already exists, and the lowest band is where an analyst
+learns what their own machine looks like.
 
 ```mermaid
 flowchart TD
@@ -481,9 +495,10 @@ mapped region and `IMAGE_REWRITTEN_POINTS` (40) to an image region. The
 asymmetry is deliberate: JIT engines rewrite private code all day, so that
 case only nudges a region that already scores, while image code is never
 legitimately rewritten in place except by an inline hook. Forty points puts a
-bare image region that was rewritten just under the review threshold of 50:
-scored and tinted, so the analyst sees it, but not filling the review band
-with the hooks an EDR legitimately places in `ntdll` on every process.
+bare image region that was rewritten in the **review** band and nowhere near
+**likely injection**, which is the right place for it: the hooks an EDR puts
+in `ntdll` on every process are worth recognising once and never worth
+escalating.
 
 This is the detector the Trovent write-up in RESEARCH_NOTES.md motivates: an
 injector that overwrites an existing RWX region never allocates and never flips

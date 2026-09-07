@@ -316,3 +316,21 @@ def test_rwx_and_nop_sled_carry_no_technique():
     assert [r for r in reasons if not r.endswith("]")] == [
         "writable + executable (RWX)", "NOP sled",
     ]
+
+
+# --- triage bands ----------------------------------------------------------
+def test_verdict_band_edges():
+    from memlapse.analytics import LIKELY_SCORE, REVIEW_SCORE
+    band = lambda score: RegionVerdict(0, 0, score, ()).band
+    assert band(0) == ""
+    assert band(1) == "low"
+    assert band(REVIEW_SCORE - 1) == "low"
+    assert band(REVIEW_SCORE) == "review"
+    assert band(LIKELY_SCORE - 1) == "review"
+    assert band(LIKELY_SCORE) == "likely injection"
+    assert band(100) == "likely injection"
+
+
+def test_rewritten_image_region_lands_in_the_review_band():
+    """40 points is deliberately review, not likely injection: EDR hooks live here."""
+    assert score_region(_snap(type=_IMAGE), rewritten=True).band == "review"
