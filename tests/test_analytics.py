@@ -334,3 +334,35 @@ def test_verdict_band_edges():
 def test_rewritten_image_region_lands_in_the_review_band():
     """40 points is deliberately review, not likely injection: EDR hooks live here."""
     assert score_region(_snap(type=_IMAGE), rewritten=True).band == "review"
+
+
+# --- thread start addresses ------------------------------------------------
+def test_regions_with_thread_starts_matches_the_containing_region():
+    from memlapse.analytics import regions_with_thread_starts
+    regions = [_snap(base=0x1000, size=0x1000), _snap(base=0x9000, size=0x1000)]
+    assert regions_with_thread_starts(regions, [0x1500]) == {0x1000}
+    assert regions_with_thread_starts(regions, [0x1000]) == {0x1000}   # first byte
+    assert regions_with_thread_starts(regions, [0x1FFF]) == {0x1000}   # last byte
+    assert regions_with_thread_starts(regions, [0x2000]) == set()      # one past
+    assert regions_with_thread_starts(regions, [0x1500, 0x9500]) == {0x1000, 0x9000}
+
+
+def test_regions_with_thread_starts_ignores_addresses_in_no_region():
+    """The map and the thread list are read a moment apart."""
+    from memlapse.analytics import regions_with_thread_starts
+    assert regions_with_thread_starts([_snap()], [0xDEAD0000]) == set()
+    assert regions_with_thread_starts([], [0x1000]) == set()
+
+
+def test_score_region_thread_start_in_unbacked_memory():
+    from memlapse.analytics import THREAD_START_POINTS
+    v = score_region(_snap(), thread_start=True)
+    assert v.score == 50 + THREAD_START_POINTS
+    assert v.band == "likely injection"
+    assert any("a thread starts here" in r for r in v.reasons)
+
+
+def test_score_region_thread_start_in_an_image_is_normal():
+    """Every legitimate thread starts inside a mapped image."""
+    v = score_region(_snap(type=_IMAGE), thread_start=True)
+    assert v.score == 0 and v.reasons == ()

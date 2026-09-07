@@ -180,3 +180,29 @@ def test_heads_at_reads_legacy_region_blob_rows(dao, sample_regions):
     dao.conn.commit()
     assert dao.heads_at(rid, 1_000) == {0x10000: b"old"}
     assert dao.head_hashes_at(rid, 1_000) == {}
+
+
+# --- thread start addresses ------------------------------------------------
+def test_add_sample_stores_thread_starts_and_reads_them_back(tmp_db):
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "p.exe", 0)
+    dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 1, 1, 2), [region],
+                   None, {77: 0x7FF000, 12: 0x140000})
+    # A sample that could query no thread is normal, and is not "no sample".
+    dao.add_sample(rid, 2_000, ProcState(2_000, 1000, 1, 1, 2), [region])
+    assert dao.thread_starts_at(rid, 1_000) == [0x140000, 0x7FF000]  # by tid
+    assert dao.thread_starts_at(rid, 2_000) == []
+    conn.close()
+
+
+def test_thread_starts_at_before_any_sample_is_empty(tmp_db):
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "p.exe", 0)
+    assert dao.thread_starts_at(rid, 1_000) == []
+    conn.close()

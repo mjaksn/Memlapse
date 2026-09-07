@@ -95,7 +95,7 @@ writable executable memory, how much, and whether it is `MEM_PRIVATE`,
 `MEM_MAPPED` or `MEM_IMAGE`) is a hardening view no single-process tool offers,
 and it reuses the existing region sampler across many PIDs at a low rate.
 
-### 1.5 Thread start addresses that fall outside any image. New
+### 1.5 Thread start addresses that fall outside any image. Shipped
 
 **Source.** Every variant of the Trovent tool executes its payload with a new
 thread in the target: `CreateRemoteThread`, then `New-NtThread`, then a direct
@@ -114,6 +114,19 @@ cheap, snapshot-level rule: a thread whose start address lies in a
 `MEM_PRIVATE` or unnamed region, or in an RWX region, is suspicious on its own
 and doubly so when that region also scores. It also gives the planned
 "filter playback to one thread" feature something to show before ETW exists.
+
+**Status.** Implemented in `win32/threads.py`, which reads each thread id
+from the bulk table and then asks `NtQueryInformationThread` for the Win32
+start address one thread at a time. The bulk table's own `StartAddress` is
+no use: it holds the kernel start routine, and Windows zeroes it for an
+unelevated caller. `analytics.regions_with_thread_starts` maps the addresses
+onto the region map and `score_region` adds `THREAD_START_POINTS` (25) when
+the containing region is executable and not image-backed, which puts a
+private region with a thread on it at 75, the likely-injection band, on
+those two signals alone. Live mode reads the addresses on the pool thread
+and recordings store them per sample in `thread_snapshot`. Opening another
+user's thread needs elevation; without it the addresses are unknown and the
+rule stays silent.
 
 ### 1.6 Weight findings by how valuable the host process is. New
 

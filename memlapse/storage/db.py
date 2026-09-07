@@ -2,8 +2,9 @@
 
 WAL mode lets a collector write recordings while the UI reads for playback.
 The schema is applied idempotently on connect, so opening a fresh file just
-works, and the one shape change the schema has had so far (the head_hash
-column on region_snapshot) is applied to older databases the same way. Used
+works: a table added since a database was created (thread_snapshot, most
+recently) appears on the next open. Only a change to an existing table needs
+more, and there has been one, the head_hash column on region_snapshot. Used
 by the recording sampler to write and by the playback engine to read; the
 live monitor does not touch it.
 """

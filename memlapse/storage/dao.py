@@ -68,13 +68,18 @@ class Dao:
 
     def add_sample(self, recording_id: int, ts_us: int, state: ProcState,
                    regions: list[Region],
-                   heads: dict[int, bytes] | None = None) -> None:
+                   heads: dict[int, bytes] | None = None,
+                   thread_starts: dict[int, int] | None = None) -> None:
         """Persist one full sample (process stats + region map) atomically.
 
         ``heads`` optionally maps a region's ``base_addr`` to the first bytes
         read from it. Each distinct head is stored once in ``head`` and the
         region row carries its hash, so a head seen in an earlier sample (or
         in another region) costs nothing more than the hash.
+
+        ``thread_starts`` maps thread id to Win32 start address for the
+        threads that could be queried. Empty is normal and means unknown,
+        not none.
         """
         heads = heads or {}
         self.conn.execute(
@@ -99,6 +104,12 @@ class Dao:
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (recording_id, ts_us, r.base_addr, r.size, r.protect, r.state,
                  r.type, digest),
+            )
+        for tid, start_addr in (thread_starts or {}).items():
+            self.conn.execute(
+                "INSERT INTO thread_snapshot(recording_id, ts_us, tid, start_addr) "
+                "VALUES (?, ?, ?, ?)",
+                (recording_id, ts_us, tid, start_addr),
             )
         self.conn.commit()
 
@@ -204,3 +215,22 @@ class Dao:
             (recording_id, anchor),
         ).fetchall()
         return {b: bytes(h) for (b, h) in rows}
+
+    def thread_starts_at(self, recording_id: int, ts_us: int) -> list[int]:
+        """Thread start addresses recorded with the sample at or before ts_us.
+
+        Anchored on the region sample, like every other read here, so the
+        addresses and the region map they are matched against always come from
+        the same tick. An empty list means none could be read at that sample,
+        which an unelevated recording of another user's process produces for
+        every sample.
+        """
+        anchor = self.sample_at(recording_id, ts_us)
+        if anchor is None:
+            return []
+        rows = self.conn.execute(
+            "SELECT start_addr FROM thread_snapshot "
+            "WHERE recording_id=? AND ts_us=? ORDER BY tid",
+            (recording_id, anchor),
+        ).fetchall()
+        return [r[0] for r in rows]

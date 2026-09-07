@@ -15,7 +15,10 @@ installable package, a service, or a blocking security product.
 ## Layout
 
 - `memlapse/win32/`: ctypes wrappers over Win32 and NT calls (process table,
-  `VirtualQueryEx`, `ReadProcessMemory`, privileges). The only place that talks to the OS.
+  `VirtualQueryEx`, `ReadProcessMemory`, thread start addresses, privileges).
+  The only place that talks to the OS, and it opens two kinds of handle:
+  a process handle for queries and reads, and a query-only thread handle.
+  Neither ever asks for write, protection-change or thread-control access.
 - `memlapse/collectors/`: `QThread` pollers that call `win32/` and emit snapshots via Qt
   signals with latest-only delivery (`base.py`).
 - `memlapse/model/`, `memlapse/storage/`, `memlapse/services/`, `memlapse/analytics.py`:
@@ -63,7 +66,8 @@ coverage (2026-09-07).
 
 - Layering is strict in one direction: `ui` never calls Win32 except through the three
   uses above (the privilege calls and the bounded 512-byte hex preview read run on the
-  GUI thread; live region enumeration runs on a `QThreadPool` thread), polling and
+  GUI thread; live region enumeration and the thread start addresses that go with it
+  run on a `QThreadPool` thread), polling and
   recording live in `collectors` on their own `QThread`s and write storage there,
   playback reads storage on the GUI thread through `PlaybackEngine`, and `model`,
   `storage`, `services` and `analytics` import no Qt widgets and no Win32 (QtCore

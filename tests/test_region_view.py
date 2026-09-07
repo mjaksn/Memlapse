@@ -2,6 +2,13 @@
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _no_thread_query(monkeypatch):
+    """Keep the live loader off the real system table unless a test wants it."""
+    import memlapse.ui.region_view as mod
+    monkeypatch.setattr(mod, "start_addresses", lambda pid: {})
+
 import memlapse.ui.region_view as region_view_mod
 from memlapse.ui.region_view import RegionTableModel, RegionView, _fmt_size
 from memlapse.win32.memory import ProcessAccessError
@@ -151,7 +158,7 @@ def test_stale_load_result_is_ignored(qtbot, view, sample_regions, monkeypatch):
     _wait_regions(qtbot, view, 2)
     # Simulate the first (now stale) load arriving after a newer selection.
     view.show_live_process(5678, "other.exe")  # bumps _load_seq
-    view._on_regions_loaded(stale_req, [], True)
+    view._on_regions_loaded(stale_req, [], set(), True)
     assert "other.exe" in view.header.text()  # header reflects the newest request
 
 
@@ -266,3 +273,39 @@ def test_tooltip_starts_with_the_band(rmodel):
     tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
     assert tip.startswith("review: ")  # 50 points
     assert "unbacked" in tip
+
+
+# --- a thread starting in a region feeds the Score column ------------------
+def test_region_model_scores_a_thread_start(rmodel):
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    rmodel.set_regions([region], thread_starts={0x40000})
+    assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == "75"  # 50 + 25
+    assert "a thread starts here" in rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+
+
+def test_live_load_carries_thread_starts_into_the_model(qtbot, view, monkeypatch):
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", _fake_pm_class([region]))
+    monkeypatch.setattr(region_view_mod, "start_addresses",
+                        lambda pid: {5: 0x40100})
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 1)
+    assert view.model.data(view.model.index(0, 5), Qt.DisplayRole) == "75"
+
+
+def test_show_recorded_regions_passes_thread_starts_through(view):
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    view.show_recorded_regions([region], "Recording #1", None, None, {0x40000})
+    assert view.model.data(view.model.index(0, 5), Qt.DisplayRole) == "75"

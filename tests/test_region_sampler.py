@@ -138,3 +138,18 @@ def test_read_heads_captures_executable_readable_regions():
 def test_read_heads_skips_regions_that_read_empty():
     pm = _FakePM(can_read=True, data=b"")
     assert RegionSampler._read_heads(pm, [_exec(0x1000)]) == {}
+
+
+# --- thread start addresses are recorded with the sample -------------------
+def test_sample_records_thread_start_addresses(qapp, tmp_db, monkeypatch):
+    monkeypatch.setattr(region_mod, "start_addresses", lambda pid: {9: 0x7FF123})
+    s = RegionSampler(os.getpid(), "me", 0.01, db_path=tmp_db)
+    s.sampled.connect(lambda *_: s.stop())
+    s.run()
+    conn = connect(tmp_db)
+    try:
+        rows = conn.execute(
+            "SELECT tid, start_addr FROM thread_snapshot").fetchall()
+        assert [tuple(r) for r in rows] == [(9, 0x7FF123)]
+    finally:
+        conn.close()

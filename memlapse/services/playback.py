@@ -8,7 +8,7 @@ that time, and can compare that sample with the one before it.
 
 from __future__ import annotations
 
-from ..analytics import rewritten_regions
+from ..analytics import regions_with_thread_starts, rewritten_regions
 from ..storage import connect
 from ..storage.dao import Dao, ProcState, RecordingRow
 from ..model.region import Region
@@ -72,3 +72,20 @@ class PlaybackEngine:
 
     def close(self) -> None:
         self._conn.close()
+
+    def thread_start_regions(self, ts_us: int) -> set[int]:
+        """Base addresses of regions a thread starts in, at or before ts_us.
+
+        Both halves come from the same anchored sample. Empty when nothing is
+        open, when the recording caught no thread addresses, or when every
+        start lands in a region that is gone from the map.
+        """
+        if self.recording_id is None:
+            return set()
+        anchor = self._dao.sample_at(self.recording_id, ts_us)
+        if anchor is None:
+            return set()
+        return regions_with_thread_starts(
+            self._dao.regions_at(self.recording_id, anchor),
+            self._dao.thread_starts_at(self.recording_id, anchor),
+        )

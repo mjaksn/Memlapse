@@ -6,6 +6,9 @@ fly via ProcessMemory) and playback mode (region map and any captured region
 heads from SQLite; the heads, and the set of regions whose head changed since
 the previous sample, feed the Score column, and the hex panel shows a fixed
 note, since only the first 256 bytes of executable regions are recorded).
+
+Both modes also mark the regions a thread starts in: live from a per-thread
+query on the pool thread, playback from what the recording stored.
 """
 
 from __future__ import annotations
@@ -18,9 +21,10 @@ from PySide6.QtWidgets import (
     QLabel, QPlainTextEdit, QSplitter, QTableView, QVBoxLayout, QWidget,
 )
 
-from ..analytics import RegionVerdict, score_region
+from ..analytics import RegionVerdict, regions_with_thread_starts, score_region
 from ..model.region import Region
 from ..win32.memory import ProcessAccessError, ProcessMemory
+from ..win32.threads import start_addresses
 from .hexdump import hexdump
 from .theme import heat_color
 
@@ -31,8 +35,8 @@ HEX_PREVIEW_BYTES = 512
 class _RegionLoadSignals(QObject):
     """Signals for :class:`_RegionLoadTask` (QRunnable can't carry its own)."""
 
-    #: req_id, regions (list[Region]), readable
-    loaded = Signal(int, object, bool)
+    #: req_id, regions (list[Region]), thread-start region bases, readable
+    loaded = Signal(int, object, object, bool)
     #: req_id, error message
     failed = Signal(int, str)
 
@@ -57,12 +61,15 @@ class _RegionLoadTask(QRunnable):
             with ProcessMemory(self._pid) as pm:
                 regions = pm.regions()
                 readable = pm.can_read
+            # Also off the GUI thread: one handle per thread, query only.
+            started = regions_with_thread_starts(
+                regions, start_addresses(self._pid).values())
         except ProcessAccessError as exc:
             self.signals.failed.emit(self._req_id, str(exc))
         except Exception as exc:  # never let a pool thread die silently
             self.signals.failed.emit(self._req_id, str(exc))
         else:
-            self.signals.loaded.emit(self._req_id, regions, readable)
+            self.signals.loaded.emit(self._req_id, regions, started, readable)
 
 
 def _fmt_size(n: int) -> str:
@@ -119,20 +126,25 @@ class RegionTableModel(QAbstractTableModel):
 
     def set_regions(self, rows: list[Region],
                     heads: dict[int, bytes] | None = None,
-                    rewritten: set[int] | None = None) -> None:
+                    rewritten: set[int] | None = None,
+                    thread_starts: set[int] | None = None) -> None:
         """Replace the rows and score each one.
 
         ``heads`` carries captured bytes by base address and ``rewritten`` the
         base addresses whose head changed since the previous sample; both are
         empty in live mode, where only the structural signals apply.
+        ``thread_starts`` carries the base addresses a thread starts in, which
+        both modes can know.
         """
         heads = heads or {}
         rewritten = rewritten or set()
+        thread_starts = thread_starts or set()
         self.beginResetModel()
         self._rows = rows
         self._verdicts = [
             score_region(r, head=heads.get(r.base_addr, b""),
-                         rewritten=r.base_addr in rewritten)
+                         rewritten=r.base_addr in rewritten,
+                         thread_start=r.base_addr in thread_starts)
             for r in rows
         ]
         self.endResetModel()
@@ -205,12 +217,12 @@ class RegionView(QWidget):
         self._pool.start(task)
 
     def _on_regions_loaded(self, req_id: int, regions: list[Region],
-                           readable: bool) -> None:
+                           thread_starts: set[int], readable: bool) -> None:
         if req_id != self._load_seq or self._pending is None:
             return  # a newer selection (or a mode switch) superseded this load
         pid, name = self._pending
         self._readable = readable
-        self.model.set_regions(regions)
+        self.model.set_regions(regions, thread_starts=thread_starts)
         note = "" if readable else "  (no read access, map only)"
         self.header.setText(f"{name} ({pid}): {len(regions)} regions{note}")
 
@@ -224,14 +236,15 @@ class RegionView(QWidget):
     # --- playback mode: region map from storage, no live reads -------------
     def show_recorded_regions(self, regions: list[Region], header: str,
                               heads: dict[int, bytes] | None = None,
-                              rewritten: set[int] | None = None) -> None:
+                              rewritten: set[int] | None = None,
+                              thread_starts: set[int] | None = None) -> None:
         self._pid = None
         self._live = False
         # Invalidate any in-flight live enumeration so it can't overwrite the
         # recorded map when it finishes.
         self._load_seq += 1
         self._pending = None
-        self.model.set_regions(regions, heads, rewritten)
+        self.model.set_regions(regions, heads, rewritten, thread_starts)
         self.header.setText(header)
         self.hex.setPlainText(
             "(hex preview is live only; a recording keeps the first 256 bytes of "

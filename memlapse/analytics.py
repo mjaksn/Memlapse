@@ -155,6 +155,11 @@ _WRITE_EXEC = PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY
 ENTROPY_PACKED = 7.2
 #: minimum run of 0x90 bytes to count as a shellcode NOP sled.
 NOP_SLED_MIN = 16
+#: points for a committed, executable region that is not image-backed and
+#: that a thread starts in. Every legitimate thread starts inside a mapped
+#: image, so a start anywhere else is the shellcode-with-a-thread case.
+THREAD_START_POINTS = 25
+
 #: Score at or above which a region is worth a second look, and the score at
 #: which it is worth acting on. Three bands rather than one threshold: the
 #: lower edge is deliberately low, because a signal that scores 30 and is
@@ -243,13 +248,17 @@ class RegionVerdict:
 
 
 def score_region(region: Region, *, head: bytes = b"",
-                 rewritten: bool = False) -> RegionVerdict:
+                 rewritten: bool = False,
+                 thread_start: bool = False) -> RegionVerdict:
     """Heuristic injection score for a single region.
 
     ``head`` is the first bytes of the region (from ReadProcessMemory) when
     available; pass ``b""`` to run structural checks only. ``rewritten`` says
     the head changed since the previous sample with the region otherwise
     unchanged, which only a recording can know (see :func:`rewritten_regions`).
+    ``thread_start`` says a thread's Win32 start address falls inside this
+    region (see :func:`regions_with_thread_starts`); it only scores when the
+    region is not image-backed, since that is where threads normally start.
     Scores are additive and capped at 100. A non-executable or non-committed
     region always scores 0.
     """
@@ -276,6 +285,13 @@ def score_region(region: Region, *, head: bytes = b"",
     if region.protect & _WRITE_EXEC:
         score += 25
         reasons.append("writable + executable (RWX)")
+
+    if thread_start and region.type != MEM_IMAGE:
+        score += THREAD_START_POINTS
+        reasons.append(
+            f"a thread starts here, in memory no image backs "
+            f"[{ATTACK_INJECTION}]"
+        )
 
     # Content: only meaningful when the region's head was actually read.
     if head[:2] == b"MZ":
@@ -341,3 +357,22 @@ def rewritten_regions(prev_regions: Sequence[Region],
             continue
         changed.add(curr.base_addr)
     return changed
+
+
+def regions_with_thread_starts(regions: Sequence[Region],
+                               starts) -> set[int]:
+    """Base addresses of the regions that a thread's start address falls in.
+
+    ``starts`` is any iterable of addresses (see
+    :func:`memlapse.win32.threads.start_addresses`). An address that matches no
+    region is ignored: the map and the thread list are read a moment apart, so
+    one can name memory the other has not got. Whether a hit means anything is
+    :func:`score_region`'s decision, not this function's.
+    """
+    hits: set[int] = set()
+    for address in starts:
+        for region in regions:
+            if region.base_addr <= address < region.base_addr + region.size:
+                hits.add(region.base_addr)
+                break
+    return hits

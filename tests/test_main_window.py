@@ -282,3 +282,25 @@ def test_status_bar_reports_dropped_polls(main_window, make_process):
     win.collector.skipped = 0
     win.collector.updated.emit([make_process(pid=1)])
     assert "dropped" not in win._status_label.text()
+
+
+# --- a recorded thread start reaches the region view -----------------------
+def test_playback_seek_scores_a_recorded_thread_start(main_window):
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    win, db = main_window
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    conn = connect(db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 1_000)
+    dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 100, 50, 3), [region],
+                   None, {7: 0x40080})
+    dao.end_recording(rid, 2_000)
+    conn.close()
+
+    win._open_recording(rid)
+    win._on_seek(1_000)
+    model = win.region_view.model
+    assert model.data(model.index(0, 5), Qt.DisplayRole) == "75"  # 50 + 25

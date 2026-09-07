@@ -5,7 +5,8 @@ Two modes:
 * **Live**, the ProcessCollector streams the process list; selecting a process
   shows its live memory map (region view reads bytes on demand).
 * **Playback**, a recording is opened; the timeline scrubber drives the region
-  view from stored samples (no live reads).
+  view from stored samples (no live reads), including the regions rewritten
+  since the previous sample and the regions a thread started in.
 
 Recording is available in live mode: pick a process, hit Record, and a
 RegionSampler writes samples to SQLite until you stop.
@@ -236,6 +237,7 @@ class MainWindow(QMainWindow):
         state, regions = self.playback.seek(ts_us)
         heads = self.playback.heads(ts_us)
         rewritten = self.playback.rewritten(ts_us)
+        thread_starts = self.playback.thread_start_regions(ts_us)
         if state is not None:
             header = (
                 f"Recording #{self.playback.recording_id}, PID {state.pid}, "
@@ -247,7 +249,8 @@ class MainWindow(QMainWindow):
             )
         else:
             header = f"Recording #{self.playback.recording_id}, no data at this time"
-        self.region_view.show_recorded_regions(regions, header, heads, rewritten)
+        self.region_view.show_recorded_regions(regions, header, heads, rewritten,
+                                               thread_starts)
 
     # --- shutdown ---------------------------------------------------------
     def closeEvent(self, event) -> None:

@@ -118,6 +118,7 @@ Two more rules keep the GUI thread responsive, both learned the hard way:
 recording(id, target_pid, target_name, started_utc, ended_utc, note)
 process_snapshot(id, recording_id, ts_us, pid, wset_bytes, priv_bytes, thread_count)
 thread(id, recording_id, tid, pid, start_ts, symbol_hint)
+thread_snapshot(id, recording_id, ts_us, tid, start_addr)  -- Win32 thread start addresses, per sample
 region_snapshot(id, recording_id, ts_us, base_addr, size, protect, state, type, head_hash)
 head(hash BLOB PRIMARY KEY, content BLOB)           -- captured head bytes, one row per distinct content
 region_blob(region_snapshot_id, content BLOB)        -- legacy: heads from recordings made before `head` existed
@@ -318,6 +319,7 @@ combination is the highest-signal heuristic in this space.[^malfind]
 | **Structural** | Executable `MEM_PRIVATE` | +50 | no | T1055 | Unbacked executable memory, the core injection tell[^malfind] |
 | Structural | Executable `MEM_MAPPED` | +30 | no | T1055 | Possible **module stomping** (code written over a mapped file) |
 | Structural | Writable **and** executable (RWX/RWXC) | +25 | no | none | Self-modifying / stager memory; rare in benign code |
+| Structural | A thread starts in a committed, executable, non-image region (`THREAD_START_POINTS`) | +25 | no | T1055 | Code with a thread on it; every legitimate thread starts inside a mapped image |
 | **Content** | `MZ` header at offset 0 | +20 | yes | T1620 | PE image in memory → reflective DLL injection[^t1620] |
 | Content | NOP sled (≥ `NOP_SLED_MIN` = 16 × `0x90`) | +10 | yes | none | Classic shellcode landing zone |
 | Content | Shannon entropy ≥ `ENTROPY_PACKED` = 7.2 bits/byte | +10 | yes | T1027.002 | Packed or encrypted payload[^t1027] |
@@ -400,13 +402,16 @@ flowchart TD
         A["RegionSampler tick"] -->|VirtualQueryEx| B["regions: list[Region]"]
         A -->|"ReadProcessMemory<br/>(exec+readable only, 256B)"| C["heads: {base_addr: bytes}"]
     end
-    B --> D["Dao.add_sample(regions, heads)"]
+    B --> D["Dao.add_sample(regions, heads, thread_starts)"]
     C --> D
     subgraph store["SQLite (WAL)"]
         D -->|per-region row| E[(region_snapshot)]
         D -->|"if head present, once per distinct content"| F[(head)]
+        D -->|"one row per thread that answered"| T[(thread_snapshot)]
     end
     E --> G["PlaybackEngine.seek(ts)"]
+    T --> TS["PlaybackEngine.thread_start_regions(ts)"]
+    TS --> I
     F --> H["PlaybackEngine.heads(ts)"]
     G --> I["RegionTableModel.set_regions(regions, heads)"]
     H --> I
@@ -447,7 +452,10 @@ signals from the stored heads, plus the temporal signal below.
 ### Threading & performance notes
 
 - All memory reads happen on the **sampler `QThread`**, consistent with the
-  project rule that storage/IO stay off the GUI thread.
+  project rule that storage/IO stay off the GUI thread. Thread start
+  addresses cost one system-table query plus a handle open per thread, so
+  they are read there too, and on the `QThreadPool` task in live mode, never
+  on the GUI thread.
 - Storage cost: 32 bytes per *executable* region per tick for the hash, plus
   256 bytes once for each distinct head content. A region whose code does not
   change costs nothing new after its first sample, however long the recording.
@@ -479,6 +487,13 @@ NyxWatch author acknowledges apply here:
    Threat-Intelligence source sees the *allocation/protection-change event*
    itself and is far harder to evade, consistent with this doc's
    ["hard problem"](#the-hard-problem-stated-honestly) framing.
+5. **Thread starts that land in an image.** The thread-start signal only
+   fires for a start address outside any image, so the oldest trick of all,
+   `CreateRemoteThread` on `LoadLibraryA` in `kernel32`, does not trip it.
+   The loaded module is what gives that one away, which is the mapped-file
+   work in RESEARCH_NOTES.md 1.1. The signal also needs elevation to see
+   another user's threads; without it the addresses are simply unknown and
+   the rule stays silent rather than guessing.
 
 ### Shipped: content-change detector
 
