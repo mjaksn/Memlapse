@@ -17,6 +17,7 @@ TOKEN_ADJUST_PRIVILEGES = 0x0020
 TOKEN_QUERY = 0x0008
 SE_PRIVILEGE_ENABLED = 0x00000002
 SE_DEBUG_NAME = "SeDebugPrivilege"
+ERROR_NOT_ALL_ASSIGNED = 1300
 
 
 class LUID(ctypes.Structure):
@@ -32,6 +33,32 @@ class TOKEN_PRIVILEGES(ctypes.Structure):
                 ("Privileges", LUID_AND_ATTRIBUTES * 1)]
 
 
+# Loaded with use_last_error=True so ctypes.get_last_error() reflects these
+# calls; the shared ctypes.windll handles do not capture GetLastError.
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+
+# GetCurrentProcess returns the pseudo-handle -1. Without a HANDLE restype it
+# comes back as a 32-bit int, which OpenProcessToken rejects on 64-bit Windows.
+_kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+_kernel32.GetCurrentProcess.argtypes = []
+_kernel32.CloseHandle.restype = wintypes.BOOL
+_kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+_advapi32.OpenProcessToken.restype = wintypes.BOOL
+_advapi32.OpenProcessToken.argtypes = [
+    wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE),
+]
+_advapi32.LookupPrivilegeValueW.restype = wintypes.BOOL
+_advapi32.LookupPrivilegeValueW.argtypes = [
+    wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.POINTER(LUID),
+]
+_advapi32.AdjustTokenPrivileges.restype = wintypes.BOOL
+_advapi32.AdjustTokenPrivileges.argtypes = [
+    wintypes.HANDLE, wintypes.BOOL, ctypes.c_void_p, wintypes.DWORD,
+    ctypes.c_void_p, ctypes.c_void_p,
+]
+
+
 def is_elevated() -> bool:
     """True if the current process is running with administrator rights."""
     try:
@@ -45,12 +72,9 @@ def enable_se_debug_privilege() -> bool:
 
     Returns True on success. Fails (returns False) when not elevated.
     """
-    advapi32 = ctypes.windll.advapi32
-    kernel32 = ctypes.windll.kernel32
-
     h_token = wintypes.HANDLE()
-    if not advapi32.OpenProcessToken(
-        kernel32.GetCurrentProcess(),
+    if not _advapi32.OpenProcessToken(
+        _kernel32.GetCurrentProcess(),
         TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
         ctypes.byref(h_token),
     ):
@@ -58,7 +82,7 @@ def enable_se_debug_privilege() -> bool:
 
     try:
         luid = LUID()
-        if not advapi32.LookupPrivilegeValueW(None, SE_DEBUG_NAME, ctypes.byref(luid)):
+        if not _advapi32.LookupPrivilegeValueW(None, SE_DEBUG_NAME, ctypes.byref(luid)):
             return False
 
         tp = TOKEN_PRIVILEGES()
@@ -66,16 +90,16 @@ def enable_se_debug_privilege() -> bool:
         tp.Privileges[0].Luid = luid
         tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED
 
-        if not advapi32.AdjustTokenPrivileges(
+        if not _advapi32.AdjustTokenPrivileges(
             h_token, False, ctypes.byref(tp), 0, None, None
         ):
             return False
 
         # AdjustTokenPrivileges can "succeed" but not apply all privileges;
         # GetLastError() == ERROR_NOT_ALL_ASSIGNED (1300) means it didn't stick.
-        return ctypes.get_last_error() == 0
+        return ctypes.get_last_error() != ERROR_NOT_ALL_ASSIGNED
     finally:
-        kernel32.CloseHandle(h_token)
+        _kernel32.CloseHandle(h_token)
 
 
 def relaunch_as_admin() -> bool:

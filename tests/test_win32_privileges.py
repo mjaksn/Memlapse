@@ -1,7 +1,7 @@
 """Tests for elevation / privilege helpers.
 
-The Win32 calls are exercised through fake shell32/advapi32 shims so every
-branch is reachable without actually being elevated.
+The Win32 calls are exercised through fake shell32, advapi32 and kernel32
+shims so every branch is reachable without actually being elevated.
 """
 
 import ctypes
@@ -45,12 +45,21 @@ class FakeAdvapi:
         return self._adjust
 
 
+class FakeKernel:
+    def GetCurrentProcess(self):
+        return -1  # the pseudo-handle the real call returns
+
+    def CloseHandle(self, handle):
+        return 1
+
+
 def _set_shell(monkeypatch, shell):
     monkeypatch.setattr(privileges.ctypes.windll, "shell32", shell, raising=False)
 
 
 def _set_advapi(monkeypatch, advapi):
-    monkeypatch.setattr(privileges.ctypes.windll, "advapi32", advapi, raising=False)
+    monkeypatch.setattr(privileges, "_advapi32", advapi)
+    monkeypatch.setattr(privileges, "_kernel32", FakeKernel())
 
 
 # --- is_elevated -----------------------------------------------------------
