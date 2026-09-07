@@ -2,8 +2,9 @@
 
 Displays the VirtualQueryEx region list for a process and, on selection, a hex
 dump of the region's first bytes. Used in both live mode (reads memory on the
-fly via ProcessMemory) and playback mode (region map from SQLite, no bytes ->
-hex panel explains they weren't captured).
+fly via ProcessMemory) and playback mode (region map and any captured region
+heads from SQLite; the heads feed the Score column and the hex panel shows a
+fixed note, since only the first 256 bytes of executable regions are recorded).
 """
 
 from __future__ import annotations
@@ -219,7 +220,10 @@ class RegionView(QWidget):
         self._pending = None
         self.model.set_regions(regions, heads)
         self.header.setText(header)
-        self.hex.setPlainText("(memory contents not captured in this recording)")
+        self.hex.setPlainText(
+            "(hex preview is live only; a recording keeps the first 256 bytes of "
+            "executable regions for scoring, not for display)"
+        )
 
     def _on_model_reset(self) -> None:
         if self.model.rowCount() == 0:
@@ -231,7 +235,7 @@ class RegionView(QWidget):
             self.hex.clear()
             return
         if not self._live or self._pid is None:
-            return  # playback: leave the "not captured" note in place
+            return  # playback: leave the live-only note in place
         if not region.is_readable:
             self.hex.setPlainText(
                 f"0x{region.base_addr:012x}  {region.state_str}/{region.protect_str}"

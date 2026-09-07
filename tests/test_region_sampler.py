@@ -51,7 +51,20 @@ def test_run_stops_when_sample_raises(qapp, tmp_db, monkeypatch):
     monkeypatch.setattr(s, "_sample_once", boom)
 
     s.run()
-    assert finished == ["target process exited"]
+    assert finished == ["target process exited or became inaccessible"]
+
+
+def test_run_stops_when_access_is_denied(qapp, tmp_db, monkeypatch):
+    s = RegionSampler(os.getpid(), "me", 0.01, db_path=tmp_db)
+    finished = []
+    s.finished_recording.connect(finished.append)
+
+    def denied(*a, **k):
+        raise psutil.AccessDenied(pid=os.getpid())
+    monkeypatch.setattr(s, "_sample_once", denied)
+
+    s.run()
+    assert finished == ["target process exited or became inaccessible"]
 
 
 def test_run_stops_when_process_missing(qapp, tmp_db, monkeypatch):
@@ -62,7 +75,7 @@ def test_run_stops_when_process_missing(qapp, tmp_db, monkeypatch):
     monkeypatch.setattr(region_mod.psutil, "Process",
                         lambda pid: (_ for _ in ()).throw(psutil.NoSuchProcess(pid=pid)))
     s.run()
-    assert finished == ["target process exited"]
+    assert finished == ["target process exited or became inaccessible"]
 
 
 def test_stop_sets_flag():

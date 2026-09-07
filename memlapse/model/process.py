@@ -14,8 +14,9 @@ from dataclasses import dataclass
 class ProcessInfo:
     """A point-in-time snapshot of a single process.
 
-    Byte fields are best-effort: some values require elevation to read and
-    fall back to 0 when access is denied.
+    Byte fields come straight from the bulk NtQuerySystemInformation table and
+    need no handle or elevation; only ``username`` is best-effort and is empty
+    when psutil is denied access.
     """
 
     pid: int

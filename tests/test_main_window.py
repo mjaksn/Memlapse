@@ -1,7 +1,8 @@
 """Integration tests for the main window's mode switching and wiring.
 
-The real ProcessCollector and RegionSampler are replaced with fakes so no
-background threads run; playback reads from a temp DB seeded via the DAO.
+The real ProcessCollector, SystemCollector and RegionSampler are replaced with
+fakes so no background threads run; playback reads from a temp DB seeded via
+the DAO.
 """
 
 import os
@@ -112,7 +113,6 @@ def test_playback_seek_updates_view(main_window, sample_regions):
     rid = _seed(db, sample_regions=sample_regions)
     win._open_recording(rid)
     win._on_seek(2_000)
-    assert "200" not in win.region_view.header.text() or True  # header set
     assert "threads" in win.region_view.header.text()
 
 

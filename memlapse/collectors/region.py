@@ -67,11 +67,11 @@ class RegionSampler(QThread):
                 try:
                     self._sample_once(dao, rec_id, proc)
                 except (psutil.NoSuchProcess, psutil.AccessDenied, ProcessAccessError):
-                    reason = "target process exited"
+                    reason = "target process exited or became inaccessible"
                     break
                 self._sleep_remaining(start)
         except psutil.NoSuchProcess:
-            reason = "target process exited"
+            reason = "target process exited or became inaccessible"
         finally:
             dao.end_recording(rec_id, _now_us())
             conn.close()

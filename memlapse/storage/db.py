@@ -2,7 +2,8 @@
 
 WAL mode lets a collector write recordings while the UI reads for playback.
 The schema is applied idempotently on connect, so opening a fresh file just
-works. Wired for Phase 3 (recording), not yet used by the live monitor.
+works. Used by the recording sampler to write and by the playback engine to
+read; the live monitor does not touch it.
 """
 
 from __future__ import annotations

@@ -216,10 +216,10 @@ def test_playback_mode_regions_and_no_hex(view, sample_regions):
     view.show_recorded_regions(sample_regions, "Recording #1")
     assert view.model.rowCount() == 2
     assert view.header.text() == "Recording #1"
-    assert "not captured" in view.hex.toPlainText()
+    assert "live only" in view.hex.toPlainText()
     # Selecting in playback mode must not attempt a live read.
     view.table.selectRow(0)
-    assert "not captured" in view.hex.toPlainText()
+    assert "live only" in view.hex.toPlainText()
 
 
 def test_clearing_regions_clears_hex(qtbot, view, sample_regions, monkeypatch):

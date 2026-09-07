@@ -55,7 +55,7 @@ class RecordingManager(QObject):
 
     def stop(self) -> None:
         # Capture locally: _on_finished may null self._sampler synchronously
-        # (e.g. when the sampler emits finished during stop()).
+        # (e.g. a fake sampler that emits finished from stop()).
         sampler = self._sampler
         if sampler is not None:
             sampler.stop()

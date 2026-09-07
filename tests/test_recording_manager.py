@@ -60,19 +60,20 @@ def test_can_restart_after_stop(qapp, fake_sampler_cls):
     mgr.start(2, "b")
     assert mgr.is_recording
     assert len(fake_sampler_cls.instances) == 2
-# The conftest FakeSampler emits finished_recording from stop(), which a real
-# RegionSampler does not: being a QThread, its queued signal is delivered while
-# stop() is being waited on. RecordingManager.stop() is written against that
-# ordering and says so in its own comment, so it wants a fake that reproduces it.
 
 
+# The conftest FakeSampler emits finished_recording synchronously from stop().
+# A real RegionSampler is a QThread whose queued finished_recording is delivered
+# only when the GUI event loop next runs, after RecordingManager.stop() has
+# returned; wait() does not process events. This fake defers the emit to wait()
+# so that a stop() which forgot to wait would fail here.
 class _QThreadLikeSampler(QObject):
-    """Fake that models real RegionSampler and QThread ordering.
+    """Fake sampler whose finished_recording arrives after stop() returns.
 
-    stop() only lowers the running flag; finished_recording is delivered during
-    wait(), mirroring a real QThread whose queued signal fires once the thread
-    joins. It also counts the calls, so a stop() that forgot to wait would fail
-    here rather than pass unnoticed.
+    stop() only lowers the running flag; finished_recording is emitted from
+    wait(), standing in for a real QThread whose queued signal arrives only once
+    the caller is back in the event loop. It also counts the calls, so a stop()
+    that forgot to wait would fail here rather than pass unnoticed.
     """
 
     started = Signal(int)
@@ -99,7 +100,8 @@ class _QThreadLikeSampler(QObject):
 
     def wait(self, ms=0):
         self.wait_calls += 1
-        self.finished_recording.emit("stopped")  # thread joins, signal delivered
+        # stands in for the queued signal arriving later
+        self.finished_recording.emit("stopped")
         return True
 
     def isRunning(self):
