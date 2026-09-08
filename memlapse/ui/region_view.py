@@ -13,6 +13,8 @@ query on the pool thread, playback from what the recording stored.
 
 from __future__ import annotations
 
+import os
+import tempfile
 from contextlib import suppress
 from pathlib import Path
 
@@ -333,16 +335,26 @@ class RegionView(QWidget):
                 f"0x{region.base_addr:012x}: nothing readable to save"
             )
             return
+        # Write beside the target and rename onto it once the bytes are all
+        # there. A read failure already reports through the header and a write
+        # failure has to as well, but it must not cost the analyst a file that
+        # was already on disk: writing in place would truncate the chosen file
+        # first, so a failure part way through would destroy it. Only the
+        # temporary file ever holds a partial region.
         target = Path(path)
         try:
-            target.write_bytes(data)
+            handle, temp_name = tempfile.mkstemp(
+                dir=target.parent, prefix=f"{target.name}.", suffix=".part"
+            )
+            try:
+                with os.fdopen(handle, "wb") as out:
+                    out.write(data)
+                os.replace(temp_name, target)
+            except OSError:
+                with suppress(OSError):
+                    os.unlink(temp_name)
+                raise
         except OSError as exc:
-            # A read failure already reports through the header; a write
-            # failure has to as well, or the analyst is told nothing at all.
-            # Whatever reached the disk before the error is not a dump of the
-            # region, so it does not stay behind looking like one.
-            with suppress(OSError):
-                target.unlink(missing_ok=True)
             self.header.setText(f"save failed: {exc}")
             return
         # A short save has two different causes and the analyst needs to know

@@ -1,5 +1,7 @@
 """Tests for the region table model and the region/hex inspector view."""
 
+import os
+
 import pytest
 
 
@@ -442,29 +444,63 @@ def test_save_region_read_failure_and_empty_read(qtbot, view, sample_regions,
     assert not target.exists()
 def test_save_region_reports_a_write_failure(qtbot, view, sample_regions,
                                              monkeypatch, tmp_path):
-    """A full disk or a read-only path is reported like a failed read is."""
+    """A full disk is reported, and the file already there is left alone."""
     monkeypatch.setattr(region_view_mod, "ProcessMemory",
                         _fake_pm_class(sample_regions, read_bytes=b"A" * 4096))
     view.show_live_process(1234, "proc.exe")
     _wait_regions(qtbot, view, 2)
     view.table.selectRow(0)
     target = tmp_path / "region.bin"
+    target.write_bytes(b"evidence from an earlier save")
     _dialog(monkeypatch, str(target))
 
-    removed = []
-    def boom(self, data):
-        with open(target, "wb") as fh:
-            fh.write(b"partial")         # a truncated file reached the disk
-        raise OSError(28, "No space left on device")
-    monkeypatch.setattr(region_view_mod.Path, "write_bytes", boom)
-    real_unlink = region_view_mod.Path.unlink
-    def track(self, missing_ok=False):
-        removed.append(str(self))
-        return real_unlink(self, missing_ok=missing_ok)
-    monkeypatch.setattr(region_view_mod.Path, "unlink", track)
+    real_fdopen = os.fdopen
+
+    class _FullDisk:
+        """Takes the real fd, writes a little, then fails like a full disk."""
+
+        def __init__(self, fd):
+            self._fd = fd
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            os.close(self._fd)   # release it so the cleanup can remove the file
+            return False
+
+        def write(self, payload):
+            os.write(self._fd, payload[:16])   # some bytes reach the temp file
+            raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(region_view_mod.os, "fdopen",
+                        lambda fd, mode: _FullDisk(fd))
+    assert real_fdopen is not region_view_mod.os.fdopen
 
     view.save_selected_region()
     assert "save failed" in view.header.text()
     assert "No space left on device" in view.header.text()
-    assert removed == [str(target)]     # the partial file does not stay behind
-    assert not target.exists()
+    # The chosen file is untouched, and no partial file is left beside it.
+    assert target.read_bytes() == b"evidence from an earlier save"
+    assert [f.name for f in tmp_path.iterdir()] == ["region.bin"]
+
+
+def test_save_region_reports_a_failure_before_the_write(qtbot, view,
+                                                        sample_regions,
+                                                        monkeypatch, tmp_path):
+    """A destination that cannot be opened at all reports the same way."""
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=b"A" * 4096))
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)
+    _dialog(monkeypatch, str(tmp_path / "region.bin"))
+
+    def denied(*a, **k):
+        raise OSError(13, "Permission denied")
+    monkeypatch.setattr(region_view_mod.tempfile, "mkstemp", denied)
+
+    view.save_selected_region()
+    assert "save failed" in view.header.text()
+    assert "Permission denied" in view.header.text()
+    assert list(tmp_path.iterdir()) == []
