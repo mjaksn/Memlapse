@@ -57,6 +57,11 @@ _kernel32.ReadProcessMemory.argtypes = [
     ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
 ]
 
+_kernel32.GetProcessTimes.restype = wintypes.BOOL
+_kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [
+    ctypes.POINTER(wintypes.FILETIME)
+] * 4
+
 
 class ProcessAccessError(OSError):
     """Raised when a process cannot be opened (usually needs elevation)."""
@@ -94,6 +99,27 @@ class ProcessMemory:
         self.close()
 
     # --- operations --------------------------------------------------------
+    def creation_time(self) -> int:
+        """FILETIME ticks at which the process behind this handle started.
+
+        With the pid this identifies one instance: Windows reuses pids, so a
+        target that exits can be replaced by an unrelated process under the
+        same number. Reading it from the handle rather than from the table is
+        what makes the check sound, because holding the handle is itself what
+        stops the pid being recycled underneath the read.
+        """
+        created = wintypes.FILETIME()
+        others = (wintypes.FILETIME(), wintypes.FILETIME(), wintypes.FILETIME())
+        ok = _kernel32.GetProcessTimes(
+            self._handle, ctypes.byref(created), *(ctypes.byref(f) for f in others)
+        )
+        if not ok:
+            err = ctypes.get_last_error()
+            raise ProcessAccessError(
+                f"GetProcessTimes({self.pid}) failed (WinError {err})"
+            )
+        return (created.dwHighDateTime << 32) | created.dwLowDateTime
+
     def regions(self, *, include_free: bool = False) -> list[Region]:
         """Walk the whole address space via VirtualQueryEx."""
         out: list[Region] = []
