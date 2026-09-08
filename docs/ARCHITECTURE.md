@@ -463,16 +463,20 @@ mode, which writes up to `REGION_DUMP_MAX` of the selected region so the
 payload can go to a disassembler or a YARA rule (RESEARCH_NOTES.md 4.1).
 It is a read, like everything else here.
 
-Both the save and the hex preview check that the pid still names the process
-the map came from, by comparing `ProcessMemory.creation_time()` against the
-value captured with the map. Windows reuses pids, and an analyst can take a
-while between selecting a process and asking for its bytes; without the check
-a target that exited in between could hand back bytes belonging to whatever
-inherited its number, filed under the old selection. The comparison happens
-with the handle already open, which is what keeps the pid from being recycled
-between the check and the read. The save writes through a temporary file in
-the destination directory and renames onto the target, so a failure part way
-through cannot truncate a file that was already there.
+The save, the hex preview and every live refresh check that the pid still
+names the process the map came from, by comparing
+`ProcessMemory.creation_time()` against the value captured with the map.
+Windows reuses pids, and an analyst can take a while between selecting a
+process and asking for its bytes; without the check a target that exited in
+between could hand back bytes belonging to whatever inherited its number,
+filed under the old selection. The comparison happens with the handle already
+open, which is what keeps the pid from being recycled between the check and
+the read. A refresh that finds a different instance ends the watch rather than
+adopting the new map: comparing a stranger's heads against the watched
+process's would report every difference as code rewritten in place, which is
+the loudest thing this view can say. The save writes through a temporary file
+in the destination directory and renames onto the target, so a failure part
+way through cannot truncate a file that was already there.
 
 **Surface**, `ui/region_view.py`. `RegionTableModel` gained a **Score**
 column. On `set_regions(rows, heads)` it computes a `RegionVerdict` per row and:
@@ -573,7 +577,7 @@ injector that overwrites an existing RWX region never allocates and never flips
 a protection, so the changed bytes are the only trace it leaves.
 
 Live mode runs the same function between one refresh and the next, keeping the
-previous refresh's regions and head hashes in memory. A live monitor has no
+previous refresh's regions and head bytes in memory. A live monitor has no
 scrub-back, so a change that showed for one tick and vanished would be a
 detector nobody sees: a region seen rewritten stays flagged, and counted in
 the header as "rewritten while watching", until it leaves the map or the

@@ -278,6 +278,7 @@ class RegionView(QWidget):
         # background so the GUI thread never blocks on VirtualQueryEx. A new
         # selection starts the change history afresh, even for the same pid.
         self.model.set_regions([])
+        self._created = 0
         self._prev_regions = []
         self._prev_heads = {}
         self._live_rewritten = set()
@@ -316,8 +317,19 @@ class RegionView(QWidget):
             return  # a newer selection (or a mode switch) superseded this load
         self._in_flight = False
         pid, name = self._pending
-        self._readable = readable
+        if self._created and created != self._created:
+            # A later refresh reached a different process under the same
+            # number. Adopting it would compare a stranger's memory against
+            # the heads of the process being watched and report every
+            # difference as code rewritten in place, which is the loudest
+            # thing this view can say. The last map read from the real
+            # target stays on screen, since it is the final observation of
+            # it; every read from it is already refused by the same check.
+            self._refresh.stop()
+            self.header.setText(self._STALE.format(pid=pid))
+            return
         self._created = created
+        self._readable = readable
         # The heads are compared directly, which is the same equality test the
         # stored hashes give playback and saves hashing every head a second.
         changed = rewritten_regions(self._prev_regions, self._prev_heads,

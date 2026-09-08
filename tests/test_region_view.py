@@ -625,6 +625,7 @@ def live_view(qtbot, monkeypatch):
     from PySide6.QtCore import Qt
     _MutablePM.regions_now = [_exec_private()]
     _MutablePM.heads_now = {0x40000: b"aaa"}
+    _MutablePM.instance_created = 1000
     monkeypatch.setattr(region_view_mod, "ProcessMemory", _MutablePM)
     v = RegionView()
     qtbot.addWidget(v)
@@ -646,6 +647,7 @@ def live_view(qtbot, monkeypatch):
 def test_load_task_emits_heads_of_executable_regions(qapp, monkeypatch):
     _MutablePM.regions_now = [_exec_private(), _exec_private(0x50000)]
     _MutablePM.heads_now = {0x40000: b"MZ"}
+    _MutablePM.instance_created = 1000
     monkeypatch.setattr(region_view_mod, "ProcessMemory", _MutablePM)
     task = region_view_mod._RegionLoadTask(3, 1234)
     got = []
@@ -757,6 +759,8 @@ def test_playback_stops_the_refresh(live_view):
     v.show_recorded_regions([], "Recording #1")
     assert not v._refresh.isActive()
     assert not v._in_flight
+
+
 def test_live_entropy_fall_scores_as_unpacked(live_view):
     """A head that decrypts itself in place stacks the unpack on the rewrite."""
     from memlapse.analytics import (
@@ -780,3 +784,29 @@ def test_live_entropy_fall_scores_as_unpacked(live_view):
     _MutablePM.heads_now = {0x50000: code}
     tick()  # the region is gone and so is its finding
     assert v._live_unpacked == set()
+
+
+def test_a_refresh_onto_a_reused_pid_stops_instead_of_comparing(live_view):
+    """The rewrite rule must not fire on a stranger that inherited the pid."""
+    v, score, tick = live_view
+    tick()
+    assert v._created == 1000
+    _MutablePM.instance_created = 9999   # the target exited, the pid was reused
+    _MutablePM.heads_now = {0x40000: b"bbb"}   # a rewrite, if it were compared
+    tick()
+    assert v._live_rewritten == set()    # nothing is claimed about a stranger
+    assert "has exited" in v.header.text()
+    assert not v._refresh.isActive()    # and the watch is over
+    assert v.model.rowCount() == 1      # the target's last map is still there
+
+
+def test_watching_another_process_compares_it_with_itself(qtbot, live_view):
+    """A new selection has no creation time to be stale against."""
+    v, score, tick = live_view
+    tick()
+    _MutablePM.instance_created = 9999   # a different process this time
+    v.show_live_process(5678, "other.exe")
+    v._refresh.stop()
+    _wait_load(qtbot, v)
+    assert "has exited" not in v.header.text()
+    assert v._created == 9999

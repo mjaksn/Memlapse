@@ -61,7 +61,7 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 330 passed with 100 percent line and branch
+(2026-09-06); the test run is 332 passed with 100 percent line and branch
 coverage (2026-09-08).
 
 ## Conventions
@@ -126,6 +126,11 @@ coverage (2026-09-08).
   `skipped`; keep that contract when adding a collector. The same rule governs telling
   the GUI about the drops: the total goes out on `dropped` alongside a delivered
   snapshot, never once per drop, since a blocked consumer would queue every one of them.
+- A pid identifies a process only with its creation time. The live region view
+  re-reads the map once a second, so a target that exits mid-watch can have its
+  number taken by something else; a refresh that finds a different instance ends
+  the watch instead of adopting the map, or the temporal signals would compare
+  two unrelated processes and call the difference injected code.
 - Recordings are stored per user under `%LOCALAPPDATA%\Memlapse\memlapse.db`. Recordings
   made under the old name live in a `MemDo` folder beside it and are not picked up.
 - `git grep -P` handles Unicode escapes; plain `grep -P` on this machine does not, and
