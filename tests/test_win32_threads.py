@@ -55,17 +55,26 @@ def test_thread_ids_of_an_absent_process_is_empty(monkeypatch):
     assert thread_ids(999) == []
 
 
+#: The pid every start_addresses() call below asks about.
+_ASKED_FOR = 4242
+
+
 class _FakeKernel32:
     """OpenThread hands out the handles it was given; 0 means denied."""
 
-    def __init__(self, handles):
+    def __init__(self, handles, owners=None):
         self.handles = handles
+        #: handle -> owning pid; anything absent belongs to the pid asked for
+        self.owners = owners or {}
         self.opened: list[tuple[int, int]] = []
         self.closed: list[int] = []
 
     def OpenThread(self, access, inherit, tid):
         self.opened.append((access, tid))
         return self.handles.get(tid, 0)
+
+    def GetProcessIdOfThread(self, handle):
+        return self.owners.get(handle, _ASKED_FOR)
 
     def CloseHandle(self, handle):
         self.closed.append(handle)
@@ -87,9 +96,9 @@ class _FakeNtdll:
         return status
 
 
-def _fake_calls(monkeypatch, tids, handles, results):
+def _fake_calls(monkeypatch, tids, handles, results, owners=None):
     monkeypatch.setattr(threads_mod, "thread_ids", lambda pid: tids)
-    k32 = _FakeKernel32(handles)
+    k32 = _FakeKernel32(handles, owners)
     ntdll = _FakeNtdll(results)
     monkeypatch.setattr(threads_mod, "_kernel32", k32)
     monkeypatch.setattr(threads_mod, "_ntdll", ntdll)
@@ -118,6 +127,16 @@ def test_start_addresses_skips_a_refused_query(monkeypatch):
     k32, _ = _fake_calls(monkeypatch, [1], {1: 100}, {100: (0xC0000022, 0)})
     assert start_addresses(4242) == {}
     assert k32.closed == [100]  # the handle is still released
+
+
+def test_start_addresses_skips_a_thread_owned_by_another_process(monkeypatch):
+    """A recycled thread id must not be filed against the process asked for."""
+    k32, ntdll = _fake_calls(monkeypatch, [1, 2], {1: 100, 2: 200},
+                             {100: (0, 0x7FF000), 200: (0, 0x140000)},
+                             owners={200: 9999})
+    assert start_addresses(_ASKED_FOR) == {1: 0x7FF000}
+    assert k32.closed == [100, 200]   # both handles released either way
+    assert ntdll.classes == [threads_mod.ThreadQuerySetWin32StartAddress]
 
 
 def test_start_addresses_skips_a_zero_address(monkeypatch):

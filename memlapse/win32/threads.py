@@ -66,6 +66,9 @@ _kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
 _kernel32.CloseHandle.restype = wintypes.BOOL
 _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 
+_kernel32.GetProcessIdOfThread.restype = wintypes.DWORD
+_kernel32.GetProcessIdOfThread.argtypes = [wintypes.HANDLE]
+
 _ntdll.NtQueryInformationThread.restype = wintypes.ULONG  # NTSTATUS, unsigned
 _ntdll.NtQueryInformationThread.argtypes = [
     wintypes.HANDLE, wintypes.ULONG, ctypes.c_void_p, wintypes.ULONG,
@@ -100,9 +103,14 @@ def thread_ids(pid: int) -> list[int]:
 def start_addresses(pid: int) -> dict[int, int]:
     """Win32 start address of each of ``pid``'s threads, keyed by thread id.
 
-    A thread is omitted when its handle will not open or the kernel refuses the
-    address: unknown, which is not the same as zero. The caller sees a partial
-    map rather than a wrong one.
+    A thread is omitted when its handle will not open, when the handle turns
+    out to belong to another process, or when the kernel refuses the address:
+    unknown, which is not the same as zero. The caller sees a partial map
+    rather than a wrong one.
+
+    Callers should hold an open handle to ``pid`` across this call. That is
+    what keeps the pid itself from being recycled while the threads are
+    walked; the owner check below only covers the thread ids.
 
     A failed system table query is the same answer at a larger scale, so it
     yields an empty map rather than an exception: no thread id is known, and
@@ -120,6 +128,12 @@ def start_addresses(pid: int) -> dict[int, int]:
         if not handle:
             continue  # another user's thread, or it exited
         try:
+            # Thread ids are recycled like pids are. Between the table read
+            # and this open, the thread can have exited and its id been taken
+            # by a thread somewhere else entirely, whose start address would
+            # then be filed against this process. Ask the handle who owns it.
+            if _kernel32.GetProcessIdOfThread(handle) != pid:
+                continue
             address = ctypes.c_size_t(0)
             status = _ntdll.NtQueryInformationThread(
                 handle, ThreadQuerySetWin32StartAddress, ctypes.byref(address),
