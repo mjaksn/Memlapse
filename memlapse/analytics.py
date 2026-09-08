@@ -183,7 +183,7 @@ ATTACK_INJECTION = "T1055"      # Process Injection
 ATTACK_REFLECTIVE = "T1620"     # Reflective Code Loading
 ATTACK_PACKING = "T1027.002"    # Obfuscated Files or Information: Software Packing
 
-#: points for an executable region whose head bytes changed between samples
+#: points for an executable region whose head bytes changed between two looks
 #: while its protection and size did not (see :func:`rewritten_regions`).
 REWRITTEN_POINTS = 15
 #: the same, for an image-backed region. Legitimate code is not rewritten in
@@ -352,17 +352,20 @@ def score_region(region: Region, *, head: bytes = b"",
 
 
 def rewritten_regions(prev_regions: Sequence[Region],
-                      prev_hashes: dict[int, bytes],
+                      prev_digests: dict[int, bytes],
                       curr_regions: Sequence[Region],
-                      curr_hashes: dict[int, bytes]) -> set[int]:
+                      curr_digests: dict[int, bytes]) -> set[int]:
     """Base addresses of executable regions rewritten between two looks.
 
     The two looks are consecutive samples in playback and consecutive live
-    refreshes while watching; the comparison is the same either way.
+    refreshes while watching; the comparison is the same either way. A digest
+    is whatever identifies a head's content: the stored SHA-256 in playback,
+    the head bytes themselves in live mode, where they are already in memory
+    for the entropy rule. Only equality is asked of it, so either works.
 
     A region counts when it is committed and executable in both looks with
     the same base, size and protection, both looks captured its head, and
-    the two hashes differ. Anything else is not this detector's business: a
+    the two digests differ. Anything else is not this detector's business: a
     region that appeared, grew, or changed protection belongs to the
     allocation and transition signals, and a head missing on either side
     means the comparison cannot be made, not that the bytes changed.
@@ -377,7 +380,8 @@ def rewritten_regions(prev_regions: Sequence[Region],
             continue
         if curr.state != MEM_COMMIT or not is_executable(curr.protect):
             continue
-        old, new = prev_hashes.get(curr.base_addr), curr_hashes.get(curr.base_addr)
+        old = prev_digests.get(curr.base_addr)
+        new = curr_digests.get(curr.base_addr)
         if old is None or new is None or old == new:
             continue
         changed.add(curr.base_addr)
@@ -419,11 +423,13 @@ def unpacked_regions(prev_heads: dict[int, bytes],
                      changed) -> set[int]:
     """Base addresses whose head fell from packed entropy to code-like entropy.
 
-    ``changed`` is the set of regions already known to have been rewritten (see
-    :func:`rewritten_regions`), which is the only place this can happen: heads
-    are stored once per distinct content, so a head that did not change cannot
-    have changed entropy. Scanning only those keeps the cost proportional to
-    what moved rather than to the size of the map.
+    ``changed`` is the set of regions rewritten between the same two looks
+    (see :func:`rewritten_regions`), which is the only place this can happen:
+    a head whose bytes did not change cannot have changed entropy. Scanning
+    only those keeps the cost proportional to what moved rather than to the
+    size of the map, which is what makes the rule affordable once a second in
+    live mode. Pass the regions that changed on this look, not a set carried
+    over from an earlier one, or the two heads compared are the same bytes.
 
     A payload that decrypts itself in place goes from close to eight bits per
     byte to something a disassembler would recognise. The reverse, code turning

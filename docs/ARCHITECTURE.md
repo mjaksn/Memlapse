@@ -331,7 +331,7 @@ combination is the highest-signal heuristic in this space.[^malfind]
 | Content | Shannon entropy ≥ `ENTROPY_PACKED` = 7.2 bits/byte | +10 | yes | T1027.002 | Packed or encrypted payload[^t1027] |
 | **Temporal** | Head rewritten since the previous sample or live refresh, region otherwise unchanged (`REWRITTEN_POINTS`) | +15 | yes | T1055 | Code written into an existing executable region, with no allocation or protection change to see |
 | Temporal | The same in a `MEM_IMAGE` region (`IMAGE_REWRITTEN_POINTS`) | +40 | yes | T1055 | Inline hook or module stomping; legitimate image code is not rewritten in place |
-| Temporal | Head entropy fell from `ENTROPY_PACKED` to `ENTROPY_CODE_MAX` = 6.5 or below (`UNPACKED_POINTS`) | +20 | recording | T1027.002 | A packed payload that decrypted itself in place; stacks with the rewrite it implies |
+| Temporal | Head entropy fell from `ENTROPY_PACKED` to `ENTROPY_CODE_MAX` = 6.5 or below (`UNPACKED_POINTS`) | +20 | yes | T1027.002 | A packed payload that decrypted itself in place; stacks with the rewrite it implies |
 
 Every reason string ends with its technique in square brackets, so the tooltip
 an analyst reads and any export of the same finding name it identically
@@ -484,10 +484,11 @@ column. On `set_regions(rows, heads)` it computes a `RegionVerdict` per row and:
 
 Both modes score with the full content signals: live mode reads the head of
 each executable region on the pool thread alongside the map, playback reads
-the stored heads. Both also carry the temporal rewrite signal below, live mode
-from one refresh to the next and playback from one sample to the next. Only
-the entropy rule stays playback only, since live mode keeps the previous
-refresh's hashes rather than its bytes.
+the stored heads. Both also carry the temporal signals below, the rewrite and
+the entropy fall alike, live mode from one refresh to the next and playback
+from one sample to the next. Live mode keeps the previous refresh's head
+bytes to do it, 256 bytes per executable region, which is under 200 KiB for
+the largest process measured on this machine.
 
 ### Threading & performance notes
 
@@ -505,9 +506,15 @@ refresh's hashes rather than its bytes.
 - Each seek in playback now reads the previous sample's region list and head
   hashes as well as the anchored sample's, so a scrub costs about three region
   reads per step instead of one. The hashes query touches no blob content.
-- Scoring, and the SHA-256 of each live head, is O(head length) per region
-  and runs on the GUI thread only at `set_regions` time (per seek or per live
-  refresh), which is negligible.
+- Scoring is O(head length) per region and runs on the GUI thread only at
+  `set_regions` time (per seek or per live refresh), which is negligible. The
+  live change detector compares head bytes directly rather than hashing them,
+  and the entropy rule measures only the regions that changed on that
+  refresh, which is what keeps it affordable: a process that rewrote no
+  executable head since the last refresh costs it nothing at all. Measured
+  2026-09-08 on this machine, the largest process sampled held 716 executable
+  regions and changed none of them in a second; entropy over all 716 in one
+  tick, which needs every head to change at once, was 10 ms.
 
 ### Limitations & known evasions (stated honestly)
 

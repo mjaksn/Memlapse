@@ -218,9 +218,17 @@ add a transition rule alongside RW-to-RX.
 already deduplicated by content, so entropy is computed from the two heads
 at read time, and only for the regions the rewrite detector already flagged,
 which is the only set where the content can have moved at all. It stacks
-with the rewrite, so a private region that decrypted itself scores 85. This
-is playback only: the live view keeps only the hash of the previous refresh's
-heads, so it has no earlier bytes to measure and the rule stays silent there.
+with the rewrite, so a private region that decrypted itself scores 85.
+
+Both modes run it, playback between consecutive samples and the live view
+between one refresh and the next, which costs the live view the previous
+refresh's head bytes in memory instead of their hashes. Measuring first
+settled that it was affordable: sampled on 2026-09-08, four long-running
+desktop processes on this machine, the largest holding 716 executable
+regions, rewrote no executable head at all between two looks a second apart,
+so the rule reads nothing on an ordinary tick. The 256-byte window is the
+real limit rather than the cost: a payload that decrypts itself further into
+the region is invisible to this rule in either mode.
 
 ### 2.4 Catch short-lived processes and record lineage at creation. Part shipped
 

@@ -693,7 +693,7 @@ def test_reselecting_a_process_starts_the_history_afresh(qtbot, live_view):
     tick()
     assert v._live_rewritten == {0x40000}
     v.show_live_process(1234, "proc.exe")  # same pid, new watch
-    assert v._live_rewritten == set() and v._prev_hashes == {}
+    assert v._live_rewritten == set() and v._prev_heads == {}
     v._refresh.stop()
     _wait_load(qtbot, v)
     assert score() == "50"  # the first load of a watch has nothing to compare
@@ -757,3 +757,26 @@ def test_playback_stops_the_refresh(live_view):
     v.show_recorded_regions([], "Recording #1")
     assert not v._refresh.isActive()
     assert not v._in_flight
+def test_live_entropy_fall_scores_as_unpacked(live_view):
+    """A head that decrypts itself in place stacks the unpack on the rewrite."""
+    from memlapse.analytics import (
+        ENTROPY_CODE_MAX, ENTROPY_PACKED, shannon_entropy,
+    )
+    v, score, tick = live_view
+    packed = bytes(range(256))                     # 8.0 bits per byte
+    code = bytes(range(64)) * 4                    # 6.0 bits per byte
+    assert shannon_entropy(packed) >= ENTROPY_PACKED
+    assert shannon_entropy(code) <= ENTROPY_CODE_MAX
+    _MutablePM.heads_now = {0x40000: packed}
+    tick()  # rewritten, and packed enough to score the entropy threshold too
+    assert score() == "75"  # 50 private + 15 rewritten + 10 high entropy
+    _MutablePM.heads_now = {0x40000: code}
+    tick()  # the payload decrypted itself: 50 + 15 rewritten + 20 unpacked
+    assert score() == "85"
+    assert v._live_unpacked == {0x40000}
+    tick()  # unchanged since, but the finding stays while the region is there
+    assert score() == "85"
+    _MutablePM.regions_now = [_exec_private(0x50000)]
+    _MutablePM.heads_now = {0x50000: code}
+    tick()  # the region is gone and so is its finding
+    assert v._live_unpacked == set()

@@ -61,7 +61,7 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 329 passed with 100 percent line and branch
+(2026-09-06); the test run is 330 passed with 100 percent line and branch
 coverage (2026-09-08).
 
 ## Conventions
@@ -72,11 +72,11 @@ coverage (2026-09-08).
   16 MB, run on the GUI thread; live region enumeration, its region head reads and
   the thread start addresses that go with it run on a `QThreadPool` thread, once a
   second while the view is on screen), polling and recording live in `collectors` on
-  their own `QThread`s and write storage there,
-  playback reads storage on the GUI thread through `PlaybackEngine`, and `model`,
-  `storage`, `services` and `analytics` import no Qt widgets and no Win32 (QtCore
-  signals are allowed in `services` and `collectors`). Cross-thread hand-off is by Qt
-  signal only; no locks.
+  their own `QThread`s and write storage there, playback reads storage on the GUI
+  thread through `PlaybackEngine`, and `model`, `storage`, `services` and
+  `analytics` import no Qt widgets and no Win32 (QtCore signals are allowed in
+  `services` and `collectors`). Cross-thread hand-off is by Qt signal only; no
+  locks.
 - Keep the GIL free while the GUI is busy: a collector must not spend most of its tick
   in Python-level per-process work. Prefer one bulk syscall (see `win32/processes.py`)
   and precomputed display strings in the model. The reasons are recorded in

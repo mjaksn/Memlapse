@@ -6,10 +6,11 @@ dump of the region's first bytes. Used in both live mode and playback mode.
 Live mode enumerates the map and reads the head of each executable region on
 a pool thread, then refreshes on a timer while the view is on screen; the
 heads feed the content signals and, from the second refresh on, the regions
-whose head changed while watching are flagged as rewritten. Playback mode
-shows the region map and the captured heads from SQLite, with the regions
-whose head changed since the previous sample, and the hex panel shows a fixed
-note, since only the first 256 bytes of executable regions are recorded.
+whose head changed while watching are flagged as rewritten, and those whose
+entropy fell from packed to code-like as unpacked. Playback mode shows the
+region map and the captured heads from SQLite, with the same two sets taken
+between consecutive samples, and the hex panel shows a fixed note, since only
+the first 256 bytes of executable regions are recorded.
 
 Both modes also mark the regions a thread starts in: live from a per-thread
 query on the pool thread, playback from what the recording stored.
@@ -33,8 +34,8 @@ from PySide6.QtWidgets import (
 )
 
 from ..analytics import (
-    RegionVerdict, head_hash, regions_with_thread_starts, rewritten_regions,
-    score_region,
+    RegionVerdict, regions_with_thread_starts, rewritten_regions, score_region,
+    unpacked_regions,
 )
 from ..collectors.region import read_heads
 from ..model.region import Region
@@ -172,10 +173,9 @@ class RegionTableModel(QAbstractTableModel):
         captured in the recording) and ``rewritten`` the base addresses whose
         head changed: since the previous sample in playback, while watching in
         live mode. Without heads only the structural signals apply.
-        ``thread_starts`` carries the base addresses a thread starts in, which
-        both modes can know, and ``unpacked`` those whose entropy fell to
-        code-like values, which needs two sets of head bytes and so is
-        playback only.
+        ``thread_starts`` carries the base addresses a thread starts in and
+        ``unpacked`` those whose entropy fell to code-like values; both modes
+        can know either.
         """
         heads = heads or {}
         rewritten = rewritten or set()
@@ -217,15 +217,19 @@ class RegionView(QWidget):
         self._in_flight = False
 
         # Live mode re-enumerates on a timer. The previous refresh's regions
-        # and head hashes feed the content-change detector, and a region seen
-        # rewritten stays flagged while it is still there, since a change that
-        # showed for one tick and vanished would be a detector nobody sees.
+        # and head bytes feed the change and entropy detectors, and a region
+        # seen rewritten or unpacked stays flagged while it is still there,
+        # since a change that showed for one tick and vanished would be a
+        # detector nobody sees. Keeping the bytes rather than their hashes
+        # costs 256 bytes a region, under 200 KiB for the largest process on
+        # this machine, and is what lets the entropy rule run live at all.
         self._refresh = QTimer(self)
         self._refresh.setInterval(LIVE_REFRESH_MS)
         self._refresh.timeout.connect(self._on_refresh_tick)
         self._prev_regions: list[Region] = []
-        self._prev_hashes: dict[int, bytes] = {}
+        self._prev_heads: dict[int, bytes] = {}
         self._live_rewritten: set[int] = set()
+        self._live_unpacked: set[int] = set()
 
         self.header = QLabel("Select a process to inspect its memory map.", self)
         self.header.setWordWrap(True)
@@ -275,8 +279,9 @@ class RegionView(QWidget):
         # selection starts the change history afresh, even for the same pid.
         self.model.set_regions([])
         self._prev_regions = []
-        self._prev_hashes = {}
+        self._prev_heads = {}
         self._live_rewritten = set()
+        self._live_unpacked = set()
         self._pending = (pid, name)
         self.header.setText(f"{name} ({pid}): reading memory map…")
         self._start_load(pid)
@@ -313,13 +318,19 @@ class RegionView(QWidget):
         pid, name = self._pending
         self._readable = readable
         self._created = created
-        hashes = {base: head_hash(data) for base, data in heads.items()}
-        changed = rewritten_regions(self._prev_regions, self._prev_hashes,
-                                    regions, hashes)
+        # The heads are compared directly, which is the same equality test the
+        # stored hashes give playback and saves hashing every head a second.
+        changed = rewritten_regions(self._prev_regions, self._prev_heads,
+                                    regions, heads)
+        # Only what changed on this refresh: the sticky set below would compare
+        # a head with itself and never fall.
+        fell = unpacked_regions(self._prev_heads, heads, changed)
         present = {r.base_addr for r in regions}
         self._live_rewritten = (self._live_rewritten & present) | changed
-        self._prev_regions, self._prev_hashes = regions, hashes
-        self._replace_rows(regions, heads, self._live_rewritten, thread_starts)
+        self._live_unpacked = (self._live_unpacked & present) | fell
+        self._prev_regions, self._prev_heads = regions, heads
+        self._replace_rows(regions, heads, self._live_rewritten, thread_starts,
+                           self._live_unpacked)
         note = "" if readable else "  (no read access, map only)"
         flagged = len(self._live_rewritten)
         change = f", {flagged} rewritten while watching" if flagged else ""
@@ -328,7 +339,8 @@ class RegionView(QWidget):
         )
 
     def _replace_rows(self, regions: list[Region], heads: dict[int, bytes],
-                      rewritten: set[int], thread_starts: set[int]) -> None:
+                      rewritten: set[int], thread_starts: set[int],
+                      unpacked: set[int]) -> None:
         """Reset the model without losing the analyst's place.
 
         A model reset drops the current row silently, which would blank the
@@ -338,7 +350,8 @@ class RegionView(QWidget):
         """
         current = self.model.region_at(self.table.currentIndex().row())
         scroll = self.table.verticalScrollBar().value()
-        self.model.set_regions(regions, heads, rewritten, thread_starts)
+        self.model.set_regions(regions, heads, rewritten, thread_starts,
+                               unpacked)
         if current is not None:
             for row, r in enumerate(regions):
                 if r.base_addr == current.base_addr:
