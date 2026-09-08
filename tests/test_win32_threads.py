@@ -125,6 +125,14 @@ def test_start_addresses_skips_a_zero_address(monkeypatch):
     assert start_addresses(4242) == {}
 
 
+def test_start_addresses_survives_a_failed_table_query(monkeypatch):
+    """A table query that fails means no thread is known, not that the map is."""
+    def boom(pid):
+        raise OSError("NtQuerySystemInformation failed (NTSTATUS 0xc0000004)")
+    monkeypatch.setattr(threads_mod, "thread_ids", boom)
+    assert start_addresses(4242) == {}
+
+
 def test_start_addresses_of_this_process_are_real():
     """The layout and information class have to be right for this to pass."""
     found = start_addresses(os.getpid())

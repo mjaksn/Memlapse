@@ -103,9 +103,19 @@ def start_addresses(pid: int) -> dict[int, int]:
     A thread is omitted when its handle will not open or the kernel refuses the
     address: unknown, which is not the same as zero. The caller sees a partial
     map rather than a wrong one.
+
+    A failed system table query is the same answer at a larger scale, so it
+    yields an empty map rather than an exception: no thread id is known, and
+    the thread-start rule stays silent. Raising here would let a transient
+    query failure fail a region map that read perfectly well, and would end a
+    recording that has no other reason to stop.
     """
+    try:
+        tids = thread_ids(pid)
+    except OSError:
+        return {}
     found: dict[int, int] = {}
-    for tid in thread_ids(pid):
+    for tid in tids:
         handle = _kernel32.OpenThread(THREAD_QUERY_INFORMATION, False, tid)
         if not handle:
             continue  # another user's thread, or it exited
