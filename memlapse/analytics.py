@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from bisect import bisect_right
 from collections import Counter, deque
 from dataclasses import dataclass
 from typing import Sequence
@@ -153,8 +154,35 @@ _WRITE_EXEC = PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY
 
 #: bits/byte above which a buffer looks packed or encrypted (max is 8.0).
 ENTROPY_PACKED = 7.2
+#: bits/byte at or below which a buffer looks like plain code rather than a
+#: packed payload. Compiled x86 sits well under this; the gap between it and
+#: ENTROPY_PACKED is deliberate, so a small wobble is not a decryption.
+ENTROPY_CODE_MAX = 6.5
 #: minimum run of 0x90 bytes to count as a shellcode NOP sled.
 NOP_SLED_MIN = 16
+#: points for a region whose head fell from packed entropy to code-like
+#: entropy between two samples: a payload that decrypted itself in place.
+UNPACKED_POINTS = 20
+
+#: points for a committed, executable region that is not image-backed and
+#: that a thread starts in. Every legitimate thread starts inside a mapped
+#: image, so a start anywhere else is the shellcode-with-a-thread case.
+THREAD_START_POINTS = 25
+
+#: Score at or above which a region is worth a second look, and the score at
+#: which it is worth acting on. Three bands rather than one threshold: the
+#: lower edge is deliberately low, because a signal that scores 30 and is
+#: never shown as anything but a number is a signal nobody triages.
+REVIEW_SCORE = 30
+LIKELY_SCORE = 75
+
+#: MITRE ATT&CK technique each reason maps to, appended to the reason string
+#: so a tooltip and an export both name the technique the same way. Signals
+#: with no honest mapping carry none.
+ATTACK_INJECTION = "T1055"      # Process Injection
+ATTACK_REFLECTIVE = "T1620"     # Reflective Code Loading
+ATTACK_PACKING = "T1027.002"    # Obfuscated Files or Information: Software Packing
+
 #: points for an executable region whose head bytes changed between samples
 #: while its protection and size did not (see :func:`rewritten_regions`).
 REWRITTEN_POINTS = 15
@@ -212,15 +240,39 @@ class RegionVerdict:
     def suspicious(self) -> bool:
         return self.score > 0
 
+    @property
+    def band(self) -> str:
+        """Triage band: "", "low", "review" or "likely injection".
+
+        The empty string is for a region that scored nothing at all, which
+        is most of them. "low" is a region that tripped something without
+        reaching :data:`REVIEW_SCORE`: still shown, still tinted, but not
+        asking for the analyst's time.
+        """
+        if self.score >= LIKELY_SCORE:
+            return "likely injection"
+        if self.score >= REVIEW_SCORE:
+            return "review"
+        return "low" if self.score > 0 else ""
+
 
 def score_region(region: Region, *, head: bytes = b"",
-                 rewritten: bool = False) -> RegionVerdict:
+                 rewritten: bool = False,
+                 thread_start: bool = False,
+                 unpacked: bool = False) -> RegionVerdict:
     """Heuristic injection score for a single region.
 
     ``head`` is the first bytes of the region (from ReadProcessMemory) when
     available; pass ``b""`` to run structural checks only. ``rewritten`` says
     the head changed since the previous sample with the region otherwise
     unchanged, which only a recording can know (see :func:`rewritten_regions`).
+    ``thread_start`` says a thread's Win32 start address falls inside this
+    region (see :func:`regions_with_thread_starts`); it only scores when the
+    region is not image-backed, since that is where threads normally start.
+    ``unpacked`` says the head's entropy fell from packed to code-like
+    between samples (see :func:`unpacked_regions`). It stacks with
+    ``rewritten``, deliberately: the bytes changing is one fact and what they
+    changed into is another, and a private region that did both reaches 85.
     Scores are additive and capped at 100. A non-executable or non-committed
     region always scores 0.
     """
@@ -234,39 +286,64 @@ def score_region(region: Region, *, head: bytes = b"",
     # core injection tell (reflective loading, hollowing, raw shellcode).
     if region.type == MEM_PRIVATE:
         score += 50
-        reasons.append("executable private (unbacked) memory")
+        reasons.append(
+            f"executable private (unbacked) memory [{ATTACK_INJECTION}]"
+        )
     elif region.type == MEM_MAPPED:
         score += 30
-        reasons.append("executable mapped memory (possible module stomping)")
+        reasons.append(
+            "executable mapped memory (possible module stomping) "
+            f"[{ATTACK_INJECTION}]"
+        )
 
     if region.protect & _WRITE_EXEC:
         score += 25
         reasons.append("writable + executable (RWX)")
 
+    if thread_start and region.type != MEM_IMAGE:
+        score += THREAD_START_POINTS
+        reasons.append(
+            f"a thread starts here, in memory no image backs "
+            f"[{ATTACK_INJECTION}]"
+        )
+
     # Content: only meaningful when the region's head was actually read.
     if head[:2] == b"MZ":
         score += 20
-        reasons.append("PE header (MZ) in memory, reflective DLL")
+        reasons.append(
+            f"PE header (MZ) in memory, reflective DLL [{ATTACK_REFLECTIVE}]"
+        )
     if longest_nop_run(head) >= NOP_SLED_MIN:
         score += 10
         reasons.append("NOP sled")
     if head and shannon_entropy(head) >= ENTROPY_PACKED:
         score += 10
-        reasons.append("high entropy (packed/encrypted)")
+        reasons.append(f"high entropy (packed/encrypted) [{ATTACK_PACKING}]")
 
     # Temporal: the bytes changed but nothing about the region did. A loader
     # that overwrites an existing executable region never allocates and never
     # flips a protection, so this is the only signal it leaves. JIT engines
     # rewrite private code legitimately; image code is not rewritten at all.
+    if unpacked:
+        score += UNPACKED_POINTS
+        reasons.append(
+            "entropy fell from packed to code-like, unpacked in place "
+            f"[{ATTACK_PACKING}]"
+        )
+
     if rewritten:
         if region.type == MEM_IMAGE:
             score += IMAGE_REWRITTEN_POINTS
             reasons.append(
-                "image code rewritten in memory (inline hook or module stomping)"
+                "image code rewritten in memory (inline hook or module "
+                f"stomping) [{ATTACK_INJECTION}]"
             )
         else:
             score += REWRITTEN_POINTS
-            reasons.append("executable memory rewritten since previous sample")
+            reasons.append(
+                "executable memory rewritten since previous sample "
+                f"[{ATTACK_INJECTION}]"
+            )
 
     return RegionVerdict(
         region.base_addr, region.size, min(score, 100), tuple(reasons)
@@ -301,3 +378,65 @@ def rewritten_regions(prev_regions: Sequence[Region],
             continue
         changed.add(curr.base_addr)
     return changed
+
+
+def regions_with_thread_starts(regions: Sequence[Region],
+                               starts) -> set[int]:
+    """Base addresses of the regions that a thread's start address falls in.
+
+    ``starts`` is any iterable of addresses (see
+    :func:`memlapse.win32.threads.start_addresses`). An address that matches no
+    region is ignored: the map and the thread list are read a moment apart, so
+    one can name memory the other has not got. Whether a hit means anything is
+    :func:`score_region`'s decision, not this function's.
+
+    Each address is placed by binary search rather than by scanning the map,
+    which matters because playback calls this on the GUI thread for every
+    seek and a busy process has thousands of regions and hundreds of threads.
+    Regions never overlap, so the last one starting at or below an address is
+    the only candidate. The sort is what makes that safe for any caller and
+    costs almost nothing for the ordered maps both sources already produce.
+    """
+    ordered = sorted(regions, key=lambda r: r.base_addr)
+    bases = [r.base_addr for r in ordered]
+    hits: set[int] = set()
+    for address in starts:
+        index = bisect_right(bases, address) - 1
+        if index < 0:
+            continue  # below every region
+        region = ordered[index]
+        if address < region.base_addr + region.size:
+            hits.add(region.base_addr)
+    return hits
+
+
+def unpacked_regions(prev_heads: dict[int, bytes],
+                     curr_heads: dict[int, bytes],
+                     changed) -> set[int]:
+    """Base addresses whose head fell from packed entropy to code-like entropy.
+
+    ``changed`` is the set of regions already known to have been rewritten (see
+    :func:`rewritten_regions`), which is the only place this can happen: heads
+    are stored once per distinct content, so a head that did not change cannot
+    have changed entropy. Scanning only those keeps the cost proportional to
+    what moved rather than to the size of the map.
+
+    A payload that decrypts itself in place goes from close to eight bits per
+    byte to something a disassembler would recognise. The reverse, code turning
+    into noise, is not this signal: that is a region being overwritten with a
+    new packed payload, which :func:`rewritten_regions` already reports.
+
+    The two heads must be the same length to be compared at all. A head is
+    stored with however many bytes the read returned, so a full 256-byte
+    packed head followed by a short read would otherwise look like a collapse
+    in entropy when nothing changed but how much of the region could be read.
+    """
+    fell: set[int] = set()
+    for base in changed:
+        before, after = prev_heads.get(base), curr_heads.get(base)
+        if not before or not after or len(before) != len(after):
+            continue
+        if (shannon_entropy(before) >= ENTROPY_PACKED
+                and shannon_entropy(after) <= ENTROPY_CODE_MAX):
+            fell.add(base)
+    return fell

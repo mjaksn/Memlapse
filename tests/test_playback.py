@@ -121,3 +121,68 @@ def test_rewritten_reports_the_region_whose_head_changed(tmp_db):
         assert engine.rewritten(3_500) == {0x10000}    # anchored to the 3_000 sample
     finally:
         engine.close()
+
+
+# --- regions a thread starts in --------------------------------------------
+def test_thread_start_regions_before_open_is_empty(seeded_db):
+    db, _ = seeded_db
+    engine = PlaybackEngine(db_path=db)
+    try:
+        assert engine.thread_start_regions(1_000) == set()
+    finally:
+        engine.close()
+
+
+def test_thread_start_regions_matches_the_recorded_addresses(tmp_db):
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "p.exe", 0)
+    dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 1, 1, 1), [region],
+                   None, {5: 0x40100})
+    conn.close()
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.thread_start_regions(1_000) == {0x40000}
+        assert engine.thread_start_regions(1) == set()   # before the first sample
+    finally:
+        engine.close()
+
+
+# --- entropy falling to code-like values -----------------------------------
+def test_unpacked_reports_a_region_that_decrypted_itself(tmp_db):
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    packed, code = bytes(range(256)), b"\x48\x8b\x05\x01" * 64
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "p.exe", 0)
+    for ts, head in ((1_000, packed), (2_000, code)):
+        dao.add_sample(rid, ts, ProcState(ts, 1000, 1, 1, 1), [region],
+                       {0x40000: head})
+    conn.close()
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        changed = engine.rewritten(2_000)
+        assert changed == {0x40000}
+        assert engine.unpacked(2_000, changed) == {0x40000}
+        assert engine.unpacked(2_000, set()) == set()   # nothing changed, no reads
+        assert engine.unpacked(1_000, {0x40000}) == set()  # no previous sample
+    finally:
+        engine.close()
+
+
+def test_unpacked_before_open_is_empty(seeded_db):
+    db, _ = seeded_db
+    engine = PlaybackEngine(db_path=db)
+    try:
+        assert engine.unpacked(1_000, {0x40000}) == set()
+    finally:
+        engine.close()

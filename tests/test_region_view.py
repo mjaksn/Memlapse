@@ -1,6 +1,15 @@
 """Tests for the region table model and the region/hex inspector view."""
 
+import os
+
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_thread_query(monkeypatch):
+    """Keep the live loader off the real system table unless a test wants it."""
+    import memlapse.ui.region_view as mod
+    monkeypatch.setattr(mod, "start_addresses", lambda pid: {})
 
 import memlapse.ui.region_view as region_view_mod
 from memlapse.ui.region_view import RegionTableModel, RegionView, _fmt_size
@@ -92,11 +101,16 @@ def test_on_region_selected_invalid_clears_hex(qtbot, view, sample_regions, monk
 
 
 # --- fake ProcessMemory used to drive the live view ------------------------
-def _fake_pm_class(regions, readable=True, read_bytes=b"\x01\x02\x03\x04"):
+def _fake_pm_class(regions, readable=True, read_bytes=b"\x01\x02\x03\x04",
+                   created=1000):
     class FakePM:
+        instance_created = created   # a test can move this to fake pid reuse
+
         def __init__(self, pid, want_read=True):
             self.pid = pid
             self.can_read = readable
+        def creation_time(self):
+            return type(self).instance_created
         def __enter__(self):
             return self
         def __exit__(self, *a):
@@ -151,7 +165,7 @@ def test_stale_load_result_is_ignored(qtbot, view, sample_regions, monkeypatch):
     _wait_regions(qtbot, view, 2)
     # Simulate the first (now stale) load arriving after a newer selection.
     view.show_live_process(5678, "other.exe")  # bumps _load_seq
-    view._on_regions_loaded(stale_req, [], True)
+    view._on_regions_loaded(stale_req, [], set(), 1000, True)
     assert "other.exe" in view.header.text()  # header reflects the newest request
 
 
@@ -165,6 +179,25 @@ def test_stale_failed_result_is_ignored(qtbot, view, sample_regions, monkeypatch
     view._on_regions_failed(view._load_seq - 1, "late error")  # stale req id
     assert view.header.text() == header
     assert view.model.rowCount() == 2
+
+
+def test_the_thread_walk_happens_while_the_process_handle_is_open(qapp,
+                                                                  monkeypatch):
+    """The pid stays pinned across the walk, or the starts can come from the
+    process that inherited the number."""
+    order = []
+    pm_class = _fake_pm_class([])
+
+    class TrackingPM(pm_class):
+        def __exit__(self, *a):
+            order.append("handle closed")
+            return super().__exit__(*a)
+
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", TrackingPM)
+    monkeypatch.setattr(region_view_mod, "start_addresses",
+                        lambda pid: order.append("thread walk") or {})
+    region_view_mod._RegionLoadTask(1, 1234).run()
+    assert order == ["thread walk", "handle closed"]
 
 
 def test_region_load_task_reports_unexpected_error(qapp, monkeypatch):
@@ -253,3 +286,300 @@ def test_show_recorded_regions_passes_rewritten_through(view):
     view.show_recorded_regions([_exec_private()], "Recording #1", None, {0x40000})
     assert view.model.data(view.model.index(0, 5), Qt.DisplayRole) == "65"
     assert "rewritten" in view.model.data(view.model.index(0, 5), Qt.ToolTipRole)
+
+
+# --- the tooltip leads with the triage band --------------------------------
+def test_tooltip_starts_with_the_band(rmodel):
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    rmodel.set_regions([Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ,
+                               MEM_PRIVATE)])
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert tip.startswith("review: ")  # 50 points
+    assert "unbacked" in tip
+
+
+# --- a thread starting in a region feeds the Score column ------------------
+def test_region_model_scores_a_thread_start(rmodel):
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    rmodel.set_regions([region], thread_starts={0x40000})
+    assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == "75"  # 50 + 25
+    assert "a thread starts here" in rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+
+
+def test_live_load_carries_thread_starts_into_the_model(qtbot, view, monkeypatch):
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", _fake_pm_class([region]))
+    monkeypatch.setattr(region_view_mod, "start_addresses",
+                        lambda pid: {5: 0x40100})
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 1)
+    assert view.model.data(view.model.index(0, 5), Qt.DisplayRole) == "75"
+
+
+def test_show_recorded_regions_passes_thread_starts_through(view):
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    view.show_recorded_regions([region], "Recording #1", None, None, {0x40000})
+    assert view.model.data(view.model.index(0, 5), Qt.DisplayRole) == "75"
+
+
+# --- the unpacking signal reaches the Score column -------------------------
+def test_region_model_scores_an_unpacked_region(rmodel):
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    rmodel.set_regions([region], unpacked={0x40000})
+    assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == "70"  # 50 + 20
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert "unpacked in place" in tip
+
+
+def test_show_recorded_regions_passes_unpacked_through(view):
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    view.show_recorded_regions([region], "Recording #1", None, None, None,
+                               {0x40000})
+    assert view.model.data(view.model.index(0, 5), Qt.DisplayRole) == "70"
+
+
+# --- saving a region's bytes -----------------------------------------------
+def _dialog(monkeypatch, path):
+    """Patch the save dialog to answer with ``path`` (empty means cancelled)."""
+    monkeypatch.setattr(region_view_mod.QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (path, "")))
+
+
+def test_save_region_writes_the_bytes(qtbot, view, sample_regions, monkeypatch,
+                                      tmp_path):
+    whole = b"A" * 4096  # the first sample region is 4096 bytes
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=whole))
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)
+    target = tmp_path / "region.bin"
+    _dialog(monkeypatch, str(target))
+    view.save_selected_region()
+    assert target.read_bytes() == whole
+    assert view.header.text() == "saved 4.0K from 0x000000010000"
+
+
+# --- pid reuse: the bytes must come from the process that was selected ------
+def test_a_reused_pid_is_refused_for_a_save(qtbot, view, sample_regions,
+                                            monkeypatch, tmp_path):
+    """The target exited and something else now answers to its pid."""
+    pm_class = _fake_pm_class(sample_regions, read_bytes=b"B" * 4096)
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", pm_class)
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)
+    target = tmp_path / "region.bin"
+    _dialog(monkeypatch, str(target))
+
+    pm_class.instance_created = 9999    # a different process, same pid
+    view.save_selected_region()
+    assert "save refused" in view.header.text()
+    assert "belongs to another process" in view.header.text()
+    assert not target.exists()          # nothing of the replacement was kept
+
+
+def test_a_reused_pid_is_refused_for_the_hex_preview(qtbot, view, sample_regions,
+                                                     monkeypatch):
+    pm_class = _fake_pm_class(sample_regions, read_bytes=b"ABCD")
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", pm_class)
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)
+    assert "ABCD" in view.hex.toPlainText()
+
+    pm_class.instance_created = 9999
+    view.table.selectRow(1)   # move away and back, so the preview is re-read
+    view.table.selectRow(0)
+    assert "belongs to another process" in view.hex.toPlainText()
+
+
+def test_save_region_reports_a_short_read(qtbot, view, sample_regions,
+                                          monkeypatch, tmp_path):
+    """The target gave back less than the region holds, which is its doing."""
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=b"PAYLOAD"))
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)
+    target = tmp_path / "region.bin"
+    _dialog(monkeypatch, str(target))
+    view.save_selected_region()
+    assert target.read_bytes() == b"PAYLOAD"
+    assert "short read of 4.0K" in view.header.text()
+
+
+def test_save_region_reports_the_cap(qtbot, view, sample_regions, monkeypatch,
+                                     tmp_path):
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=b"12345678"))
+    monkeypatch.setattr(region_view_mod, "REGION_DUMP_MAX", 8)
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)  # a 4096-byte region
+    target = tmp_path / "region.bin"
+    _dialog(monkeypatch, str(target))
+    view.save_selected_region()
+    assert len(target.read_bytes()) == 8
+    assert "capped at 8B" in view.header.text()
+    assert "short read" not in view.header.text()   # the cap was met exactly
+
+
+def test_save_region_reports_the_cap_and_a_short_read_together(qtbot, view,
+                                                               sample_regions,
+                                                               monkeypatch,
+                                                               tmp_path):
+    """Our cap must not hide the target's short read: both, or neither is true."""
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=b"123"))
+    monkeypatch.setattr(region_view_mod, "REGION_DUMP_MAX", 8)
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)  # a 4096-byte region, capped to 8, only 3 readable
+    target = tmp_path / "region.bin"
+    _dialog(monkeypatch, str(target))
+    view.save_selected_region()
+    assert target.read_bytes() == b"123"
+    text = view.header.text()
+    assert "capped at 8B of 4.0K" in text
+    assert "short read of 8B" in text
+
+
+def test_save_region_without_a_selection(view, monkeypatch, tmp_path):
+    _dialog(monkeypatch, str(tmp_path / "unused.bin"))
+    view.save_selected_region()
+    assert "Select a region first" in view.header.text()
+    assert not (tmp_path / "unused.bin").exists()
+
+
+def test_save_region_is_refused_in_playback(view, sample_regions, monkeypatch,
+                                            tmp_path):
+    view.show_recorded_regions(sample_regions, "Recording #1")
+    view.table.selectRow(0)
+    _dialog(monkeypatch, str(tmp_path / "unused.bin"))
+    view.save_selected_region()
+    assert "live only" in view.header.text()
+    assert not (tmp_path / "unused.bin").exists()
+
+
+def test_save_region_cancelled_writes_nothing(qtbot, view, sample_regions,
+                                              monkeypatch):
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=b"X"))
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)
+    header = view.header.text()
+    _dialog(monkeypatch, "")
+    view.save_selected_region()
+    assert view.header.text() == header  # nothing happened, nothing reported
+
+
+def test_save_region_read_failure_and_empty_read(qtbot, view, sample_regions,
+                                                 monkeypatch, tmp_path):
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=b"X"))
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)
+    target = tmp_path / "region.bin"
+    _dialog(monkeypatch, str(target))
+
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=b""))
+    view.save_selected_region()
+    assert "nothing readable" in view.header.text()
+    assert not target.exists()
+
+    class Boom:
+        def __init__(self, *a, **k):
+            raise ProcessAccessError("gone")
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", Boom)
+    view.save_selected_region()
+    assert "save failed" in view.header.text()
+    assert not target.exists()
+def test_save_region_reports_a_write_failure(qtbot, view, sample_regions,
+                                             monkeypatch, tmp_path):
+    """A full disk is reported, and the file already there is left alone."""
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=b"A" * 4096))
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)
+    target = tmp_path / "region.bin"
+    target.write_bytes(b"evidence from an earlier save")
+    _dialog(monkeypatch, str(target))
+
+    real_fdopen = os.fdopen
+
+    class _FullDisk:
+        """Takes the real fd, writes a little, then fails like a full disk."""
+
+        def __init__(self, fd):
+            self._fd = fd
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            os.close(self._fd)   # release it so the cleanup can remove the file
+            return False
+
+        def write(self, payload):
+            os.write(self._fd, payload[:16])   # some bytes reach the temp file
+            raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(region_view_mod.os, "fdopen",
+                        lambda fd, mode: _FullDisk(fd))
+    assert real_fdopen is not region_view_mod.os.fdopen
+
+    view.save_selected_region()
+    assert "save failed" in view.header.text()
+    assert "No space left on device" in view.header.text()
+    # The chosen file is untouched, and no partial file is left beside it.
+    assert target.read_bytes() == b"evidence from an earlier save"
+    assert [f.name for f in tmp_path.iterdir()] == ["region.bin"]
+
+
+def test_save_region_reports_a_failure_before_the_write(qtbot, view,
+                                                        sample_regions,
+                                                        monkeypatch, tmp_path):
+    """A destination that cannot be opened at all reports the same way."""
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=b"A" * 4096))
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)
+    _dialog(monkeypatch, str(tmp_path / "region.bin"))
+
+    def denied(*a, **k):
+        raise OSError(13, "Permission denied")
+    monkeypatch.setattr(region_view_mod.tempfile, "mkstemp", denied)
+
+    view.save_selected_region()
+    assert "save failed" in view.header.text()
+    assert "Permission denied" in view.header.text()
+    assert list(tmp_path.iterdir()) == []

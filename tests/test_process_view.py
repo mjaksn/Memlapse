@@ -24,7 +24,7 @@ def model(qapp):
 def test_model_dimensions_and_headers(model, make_process):
     model.set_processes([make_process()])
     assert model.rowCount() == 1
-    assert model.columnCount() == 6
+    assert model.columnCount() == 7
     assert model.headerData(0, Qt.Horizontal, Qt.DisplayRole) == "PID"
     # Vertical header / non-display roles return None.
     assert model.headerData(0, Qt.Vertical, Qt.DisplayRole) is None
@@ -144,3 +144,18 @@ def test_selection_survives_refresh_without_reemit(view, make_process):
                            make_process(pid=1, name="a.exe")])
     assert view._selected_pid == selected_pid
     assert len(emitted) == 1  # no re-emit for the same pid
+
+
+# --- the Parent column -----------------------------------------------------
+def test_parent_column_shows_and_sorts_by_creator(model, make_process):
+    from PySide6.QtCore import Qt
+    model.set_processes([
+        make_process(pid=10, name="child.exe", parent_pid=600),
+        make_process(pid=11, name="orphan.exe", parent_pid=0),
+    ])
+    assert model.headerData(6, Qt.Horizontal, Qt.DisplayRole) == "Parent"
+    assert model.data(model.index(0, 6), Qt.DisplayRole) == 600
+    assert model.data(model.index(1, 6), Qt.DisplayRole) == ""
+    assert model.data(model.index(0, 6), Qt.UserRole) == 600
+    assert model.data(model.index(1, 6), Qt.UserRole) == 0
+    assert model.data(model.index(0, 6), Qt.TextAlignmentRole) is not None

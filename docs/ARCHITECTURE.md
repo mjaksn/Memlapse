@@ -99,7 +99,14 @@ Two more rules keep the GUI thread responsive, both learned the hard way:
   that emits faster than the GUI consumes builds an unbounded backlog and the
   window eventually freezes. `collectors/base.py` only emits a snapshot once
   the previous one has been dequeued on the GUI thread and drops the poll
-  otherwise (`skipped` counts them).
+  otherwise (`skipped` counts them). The status bar names each stream and its
+  count, because a design that discards data quietly is indistinguishable from
+  one that loses it (RESEARCH_NOTES.md 7.4). The count reaches the GUI on the
+  `dropped` signal, handed over with the next delivered snapshot rather than
+  on each drop: a GUI busy enough to drop polls is not draining its queue, so
+  announcing every drop as it happened would rebuild the backlog this rule
+  exists to prevent. Playback owns the status line while it is on screen, so
+  the counts are kept and shown again on the return to live.
 - **Keep the GIL free while the GUI works.** Qt's model/view calls back into
   Python thousands of times per refresh (`data()` for sorting, filtering and
   painting), and each callback must take the GIL. A collector that spends most
@@ -116,6 +123,7 @@ Two more rules keep the GUI thread responsive, both learned the hard way:
 recording(id, target_pid, target_name, started_utc, ended_utc, note)
 process_snapshot(id, recording_id, ts_us, pid, wset_bytes, priv_bytes, thread_count)
 thread(id, recording_id, tid, pid, start_ts, symbol_hint)
+thread_snapshot(id, recording_id, ts_us, tid, start_addr)  -- Win32 thread start addresses, per sample
 region_snapshot(id, recording_id, ts_us, base_addr, size, protect, state, type, head_hash)
 head(hash BLOB PRIMARY KEY, content BLOB)           -- captured head bytes, one row per distinct content
 region_blob(region_snapshot_id, content BLOB)        -- legacy: heads from recordings made before `head` existed
@@ -311,16 +319,25 @@ combination is the highest-signal heuristic in this space.[^malfind]
 (`base_addr`, `size`, `score` 0 to 100, `reasons`, `suspicious`). Signals are
 **additive** and split into two tiers by whether they need the region's bytes:
 
-| Tier | Signal | Points | Needs bytes? | Rationale |
-|---|---|---:|:--:|---|
-| **Structural** | Executable `MEM_PRIVATE` | +50 | no | Unbacked executable memory, the core injection tell[^malfind] |
-| Structural | Executable `MEM_MAPPED` | +30 | no | Possible **module stomping** (code written over a mapped file) |
-| Structural | Writable **and** executable (RWX/RWXC) | +25 | no | Self-modifying / stager memory; rare in benign code |
-| **Content** | `MZ` header at offset 0 | +20 | yes | PE image in memory → reflective DLL injection[^t1055] |
-| Content | NOP sled (≥ `NOP_SLED_MIN` = 16 × `0x90`) | +10 | yes | Classic shellcode landing zone |
-| Content | Shannon entropy ≥ `ENTROPY_PACKED` = 7.2 bits/byte | +10 | yes | Packed or encrypted payload[^entropy] |
-| **Temporal** | Head rewritten since the previous sample, region otherwise unchanged (`REWRITTEN_POINTS`) | +15 | recording | Code written into an existing executable region, with no allocation or protection change to see |
-| Temporal | The same in a `MEM_IMAGE` region (`IMAGE_REWRITTEN_POINTS`) | +40 | recording | Inline hook or module stomping; legitimate image code is not rewritten in place |
+| Tier | Signal | Points | Needs bytes? | Technique | Rationale |
+|---|---|---:|:--:|---|---|
+| **Structural** | Executable `MEM_PRIVATE` | +50 | no | T1055 | Unbacked executable memory, the core injection tell[^malfind] |
+| Structural | Executable `MEM_MAPPED` | +30 | no | T1055 | Possible **module stomping** (code written over a mapped file) |
+| Structural | Writable **and** executable (RWX/RWXC) | +25 | no | none | Self-modifying / stager memory; rare in benign code |
+| Structural | A thread starts in a committed, executable, non-image region (`THREAD_START_POINTS`) | +25 | no | T1055 | Code with a thread on it; every legitimate thread starts inside a mapped image |
+| **Content** | `MZ` header at offset 0 | +20 | yes | T1620 | PE image in memory → reflective DLL injection[^t1620] |
+| Content | NOP sled (≥ `NOP_SLED_MIN` = 16 × `0x90`) | +10 | yes | none | Classic shellcode landing zone |
+| Content | Shannon entropy ≥ `ENTROPY_PACKED` = 7.2 bits/byte | +10 | yes | T1027.002 | Packed or encrypted payload[^t1027] |
+| **Temporal** | Head rewritten since the previous sample, region otherwise unchanged (`REWRITTEN_POINTS`) | +15 | recording | T1055 | Code written into an existing executable region, with no allocation or protection change to see |
+| Temporal | The same in a `MEM_IMAGE` region (`IMAGE_REWRITTEN_POINTS`) | +40 | recording | T1055 | Inline hook or module stomping; legitimate image code is not rewritten in place |
+| Temporal | Head entropy fell from `ENTROPY_PACKED` to `ENTROPY_CODE_MAX` = 6.5 or below (`UNPACKED_POINTS`) | +20 | recording | T1027.002 | A packed payload that decrypted itself in place; stacks with the rewrite it implies |
+
+Every reason string ends with its technique in square brackets, so the tooltip
+an analyst reads and any export of the same finding name it identically
+(RESEARCH_NOTES.md 4.4). Two signals carry none: RWX is a property of a page
+rather than a technique, and a NOP sled is a shellcode artefact ATT&CK does
+not name. Inventing an identifier for either would make the rest of the
+mapping less trustworthy, not more.
 
 The total is capped at 100. Non-committed or non-executable regions
 short-circuit to score 0. When `head` is empty (no bytes captured, e.g. an
@@ -333,8 +350,22 @@ Supporting helpers, all pure and unit-tested (`tests/test_analytics.py`):
 - `shannon_entropy(data)`, `H = -Σ pᵢ·log₂ pᵢ`, in bits/byte (0.0 to 8.0).[^entropy]
 - `longest_nop_run(data)`, longest run of `0x90`.
 
-Suggested triage thresholds (tune against a JIT-heavy baseline, see
-Limitations): **≥ 50 = review, ≥ 75 = likely injection.**
+Every scored region falls in one of three bands (tune them against a
+JIT-heavy baseline, see Limitations), and the band leads the tooltip because
+a bare number does not tell an analyst what to do with it:
+
+| Band | Score | What it means |
+|---|---:|---|
+| low | 1 to 29 | Something tripped, not enough to spend time on. Shown and tinted all the same. |
+| review | `REVIEW_SCORE` = 30 to 74 | Worth a second look. Most JIT and EDR artefacts land here. |
+| likely injection | `LIKELY_SCORE` = 75 and above | Act on it. |
+
+The lower edge is 30 rather than 50 on the reasoning in RESEARCH_NOTES.md
+7.1: a commercial platform treats 30 as the point where a detection is worth
+forwarding, and a band that starts at 50 leaves the single-signal findings
+between them looking identical to noise. Three bands cost nothing on an
+additive scale that already exists, and the lowest band is where an analyst
+learns what their own machine looks like.
 
 ```mermaid
 flowchart TD
@@ -348,8 +379,11 @@ flowchart TD
     M --> W
     N --> W
     W -- yes --> WX["+25 writable+executable"]
-    W -- no --> C1{"head starts 'MZ'?"}
-    WX --> C1
+    W -- no --> TH{"a thread starts here,<br/>and not MEM_IMAGE?"}
+    WX --> TH
+    TH -- yes --> THP["+25 thread start in unbacked memory"]
+    TH -- no --> C1{"head starts 'MZ'?"}
+    THP --> C1
     C1 -- yes --> MZ["+20 PE header"]
     C1 -- no --> C2{"NOP run ≥ 16?"}
     MZ --> C2
@@ -357,8 +391,11 @@ flowchart TD
     C2 -- no --> C3{"entropy ≥ 7.2?"}
     NOP --> C3
     C3 -- yes --> EN["+10 packed/encrypted"]
-    C3 -- no --> R{"rewritten since previous sample?"}
-    EN --> R
+    C3 -- no --> U{"entropy fell<br/>packed to code-like?"}
+    EN --> U
+    U -- yes --> UP["+20 unpacked in place"]
+    U -- no --> R{"rewritten since previous sample?"}
+    UP --> R
     R -- "yes, MEM_IMAGE" --> RI["+40 image code rewritten"]
     R -- yes --> RW["+15 rewritten in place"]
     R -- no --> CAP["score = min(sum, 100)"]
@@ -376,17 +413,27 @@ flowchart TD
     subgraph collect["Collector (QThread)"]
         A["RegionSampler tick"] -->|VirtualQueryEx| B["regions: list[Region]"]
         A -->|"ReadProcessMemory<br/>(exec+readable only, 256B)"| C["heads: {base_addr: bytes}"]
+        A -->|"NtQueryInformationThread<br/>(per thread, query only)"| TB["thread_starts: {tid: addr}"]
     end
-    B --> D["Dao.add_sample(regions, heads)"]
+    B --> D["Dao.add_sample(regions, heads, thread_starts)"]
     C --> D
+    TB --> D
     subgraph store["SQLite (WAL)"]
         D -->|per-region row| E[(region_snapshot)]
         D -->|"if head present, once per distinct content"| F[(head)]
+        D -->|"one row per thread that answered"| T[(thread_snapshot)]
     end
     E --> G["PlaybackEngine.seek(ts)"]
+    T --> TS["PlaybackEngine.thread_start_regions(ts)"]
+    TS --> I
     F --> H["PlaybackEngine.heads(ts)"]
-    G --> I["RegionTableModel.set_regions(regions, heads)"]
+    F --> RW["PlaybackEngine.rewritten(ts)"]
+    RW --> UN["PlaybackEngine.unpacked(ts, rewritten)"]
+    F --> UN
+    G --> I["RegionTableModel.set_regions(regions, heads,<br/>rewritten, thread_starts, unpacked)"]
     H --> I
+    RW --> I
+    UN --> I
     I -->|"score_region per row"| J["RegionVerdict[]"]
     J --> K["Region view: Score column<br/>+ heat background + reason tooltip"]
 ```
@@ -410,6 +457,22 @@ content-change detector needs.
 separate from `seek()` so the latter's `(state, regions)` tuple contract is
 unchanged.
 
+The region view also offers **Save region bytes** on a right-click in live
+mode, which writes up to `REGION_DUMP_MAX` of the selected region so the
+payload can go to a disassembler or a YARA rule (RESEARCH_NOTES.md 4.1).
+It is a read, like everything else here.
+
+Both the save and the hex preview check that the pid still names the process
+the map came from, by comparing `ProcessMemory.creation_time()` against the
+value captured with the map. Windows reuses pids, and an analyst can take a
+while between selecting a process and asking for its bytes; without the check
+a target that exited in between could hand back bytes belonging to whatever
+inherited its number, filed under the old selection. The comparison happens
+with the handle already open, which is what keeps the pid from being recycled
+between the check and the read. The save writes through a temporary file in
+the destination directory and renames onto the target, so a failure part way
+through cannot truncate a file that was already there.
+
 **Surface**, `ui/region_view.py`. `RegionTableModel` gained a **Score**
 column. On `set_regions(rows, heads)` it computes a `RegionVerdict` per row and:
 
@@ -424,7 +487,10 @@ signals from the stored heads, plus the temporal signal below.
 ### Threading & performance notes
 
 - All memory reads happen on the **sampler `QThread`**, consistent with the
-  project rule that storage/IO stay off the GUI thread.
+  project rule that storage/IO stay off the GUI thread. Thread start
+  addresses cost one system-table query plus a handle open per thread, so
+  they are read there too, and on the `QThreadPool` task in live mode, never
+  on the GUI thread.
 - Storage cost: 32 bytes per *executable* region per tick for the hash, plus
   256 bytes once for each distinct head content. A region whose code does not
   change costs nothing new after its first sample, however long the recording.
@@ -456,6 +522,13 @@ NyxWatch author acknowledges apply here:
    Threat-Intelligence source sees the *allocation/protection-change event*
    itself and is far harder to evade, consistent with this doc's
    ["hard problem"](#the-hard-problem-stated-honestly) framing.
+5. **Thread starts that land in an image.** The thread-start signal only
+   fires for a start address outside any image, so the oldest trick of all,
+   `CreateRemoteThread` on `LoadLibraryA` in `kernel32`, does not trip it.
+   The loaded module is what gives that one away, which is the mapped-file
+   work in RESEARCH_NOTES.md 1.1. The signal also needs elevation to see
+   another user's threads; without it the addresses are simply unknown and
+   the rule stays silent rather than guessing.
 
 ### Shipped: content-change detector
 
@@ -474,9 +547,10 @@ mapped region and `IMAGE_REWRITTEN_POINTS` (40) to an image region. The
 asymmetry is deliberate: JIT engines rewrite private code all day, so that
 case only nudges a region that already scores, while image code is never
 legitimately rewritten in place except by an inline hook. Forty points puts a
-bare image region that was rewritten just under the review threshold of 50:
-scored and tinted, so the analyst sees it, but not filling the review band
-with the hooks an EDR legitimately places in `ntdll` on every process.
+bare image region that was rewritten in the **review** band and nowhere near
+**likely injection**, which is the right place for it: the hooks an EDR puts
+in `ntdll` on every process are worth recognising once and never worth
+escalating.
 
 This is the detector the Trovent write-up in RESEARCH_NOTES.md motivates: an
 injector that overwrites an existing RWX region never allocates and never flips
@@ -541,6 +615,11 @@ the feature ideas it suggests for later phases, is in
     <https://www.volatilityfoundation.org/>.
 [^t1055]: MITRE ATT&CK, *Process Injection* (T1055), including the *Reflective
     DLL/PE image* variants. <https://attack.mitre.org/techniques/T1055/>.
+[^t1620]: MITRE ATT&CK, *Reflective Code Loading* (T1620), loading code into a
+    process without going through the Windows loader.
+    <https://attack.mitre.org/techniques/T1620/>.
+[^t1027]: MITRE ATT&CK, *Obfuscated Files or Information: Software Packing*
+    (T1027.002). <https://attack.mitre.org/techniques/T1027/002/>.
 [^entropy]: Shannon entropy (C. E. Shannon, *A Mathematical Theory of
     Communication*, 1948) measured over bytes ranges 0 to 8 bits/byte; packed
     or encrypted data approaches the 8.0 maximum, which is why a high

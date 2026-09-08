@@ -21,10 +21,10 @@ from memlapse.model.region import (
 @pytest.fixture
 def make_process():
     def _make(pid=1000, name="proc.exe", username="me", num_threads=4,
-              wset_bytes=2048, private_bytes=1024):
+              wset_bytes=2048, private_bytes=1024, parent_pid=0):
         return ProcessInfo(pid=pid, name=name, username=username,
                            num_threads=num_threads, wset_bytes=wset_bytes,
-                           private_bytes=private_bytes)
+                           private_bytes=private_bytes, parent_pid=parent_pid)
     return _make
 
 
@@ -90,11 +90,13 @@ class FakeCollector(QObject):
     """Stand-in for ProcessCollector: no real polling thread."""
 
     updated = Signal(list)
+    dropped = Signal(int)  # the real collector announces each dropped poll
 
     def __init__(self, interval=1.0, parent=None):
         super().__init__(parent)
         self.interval = interval
         self.started_flag = False
+        self.skipped = 0  # the real collector counts dropped polls here
 
     def start(self):
         self.started_flag = True

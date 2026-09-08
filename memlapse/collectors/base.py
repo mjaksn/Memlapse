@@ -13,6 +13,12 @@ otherwise drops the poll (counted in :attr:`skipped`). The marker slot is
 connected first, so it runs before the widgets' slots for the same emit;
 the bound is therefore one snapshot being processed plus at most one more
 waiting in the queue.
+
+The dropped count is handed to the GUI on the ``dropped`` signal rather than
+read off the attribute across the thread boundary, and it goes out only
+alongside a delivered snapshot. Announcing each drop as it happened would
+rebuild the backlog this design exists to prevent, since a GUI busy enough to
+drop polls is exactly one that is not draining its queue.
 """
 
 from __future__ import annotations
@@ -28,6 +34,13 @@ class PollingCollector(QThread):
 
     #: Emitted with the snapshot returned by ``_poll()``; queued to the GUI.
     updated = Signal(object)
+    #: Emitted with the running total of dropped polls, on the same gated
+    #: path as ``updated`` and only when the total has moved. The count
+    #: belongs to this thread, so it is handed over rather than read across
+    #: the boundary, and it obeys the same latest-only rule: emitting on each
+    #: drop would queue one event per dropped poll for a GUI that is, by
+    #: definition, not draining the queue.
+    dropped = Signal(int)
 
     def __init__(self, interval: float = 1.0, parent=None) -> None:
         super().__init__(parent)
@@ -43,12 +56,21 @@ class PollingCollector(QThread):
 
     def run(self) -> None:  # executed on the collector thread
         self._running = True
+        reported = 0
         while self._running:
             start = time.monotonic()
             snapshot = self._poll()
             if self._delivered.is_set():
                 self._delivered.clear()
                 self.updated.emit(snapshot)
+                # The total rides the gated path, never the drop itself: while
+                # the GUI is blocked nothing is queued at all, and the first
+                # delivery after it recovers carries the current total. Only
+                # the latest is ever of interest, and an intermediate count
+                # queued behind a blocked GUI is one nobody will read in time.
+                if self.skipped != reported:
+                    reported = self.skipped
+                    self.dropped.emit(self.skipped)
             else:
                 self.skipped += 1
             self._sleep_remaining(start)

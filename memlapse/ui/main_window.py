@@ -5,7 +5,8 @@ Two modes:
 * **Live**, the ProcessCollector streams the process list; selecting a process
   shows its live memory map (region view reads bytes on demand).
 * **Playback**, a recording is opened; the timeline scrubber drives the region
-  view from stored samples (no live reads).
+  view from stored samples (no live reads), including the regions rewritten
+  since the previous sample and the regions a thread started in.
 
 Recording is available in live mode: pick a process, hit Record, and a
 RegionSampler writes samples to SQLite until you stop.
@@ -49,6 +50,9 @@ class MainWindow(QMainWindow):
         self._mode = "live"          # "live" | "playback"
         self._selected_pid: int | None = None
         self._selected_name: str = ""
+        # Owned by the GUI thread; each collector hands its total over.
+        self._process_count = 0
+        self._dropped = {"process": 0, "system": 0}
 
         # --- central layout ------------------------------------------------
         self.process_view = ProcessView(self)
@@ -98,11 +102,17 @@ class MainWindow(QMainWindow):
         self.collector = ProcessCollector(interval=1.0, parent=self)
         self.collector.updated.connect(self._on_processes)
         self.collector.updated.connect(self.dashboard.update_processes)
+        self.collector.dropped.connect(
+            lambda total: self._on_dropped("process", total)
+        )
         self.collector.start()
 
         # --- system-wide memory stream (drives the dashboard) --------------
         self.system_collector = SystemCollector(interval=1.0, parent=self)
         self.system_collector.updated.connect(self.dashboard.update_system)
+        self.system_collector.dropped.connect(
+            lambda total: self._on_dropped("system", total)
+        )
         self.system_collector.start()
 
     # --- toolbar ----------------------------------------------------------
@@ -136,7 +146,30 @@ class MainWindow(QMainWindow):
     def _on_processes(self, rows: list[ProcessInfo]) -> None:
         if self._mode == "live":
             self.process_view.update_processes(rows)
-            self._status_label.setText(f"{len(rows)} processes")
+            self._process_count = len(rows)
+            self._refresh_status()
+
+    def _on_dropped(self, which: str, total: int) -> None:
+        """Record a collector's dropped-poll total, handed over by signal.
+
+        Latest-only delivery drops a poll when the GUI is still busy with the
+        last one, and counting them is only honest if it shows. Both streams
+        drop independently, so each is named: the system poll feeds the
+        dashboard, and its drops would otherwise be invisible.
+        """
+        self._dropped[which] = total
+        # The collectors keep running during playback, where the status line
+        # belongs to the recording and the live count behind it is stale. The
+        # total is kept either way and shown again on the return to live.
+        if self._mode == "live":
+            self._refresh_status()
+
+    def _refresh_status(self) -> None:
+        note = "".join(
+            f", {self._dropped[which]} {which} polls dropped"
+            for which in ("process", "system") if self._dropped[which]
+        )
+        self._status_label.setText(f"{self._process_count} processes{note}")
 
     def _on_process_selected(self, pid: int, name: str) -> None:
         self._selected_pid = pid
@@ -160,6 +193,7 @@ class MainWindow(QMainWindow):
         if self.playback is not None:
             self.playback.close()
             self.playback = None
+        self._refresh_status()   # the live counts, including any drops, return
         self.region_view.header.setText("Select a process to inspect its memory map.")
         self.region_view.model.set_regions([])
         self.statusBar().showMessage("Live mode", 3000)
@@ -232,6 +266,8 @@ class MainWindow(QMainWindow):
         state, regions = self.playback.seek(ts_us)
         heads = self.playback.heads(ts_us)
         rewritten = self.playback.rewritten(ts_us)
+        thread_starts = self.playback.thread_start_regions(ts_us)
+        unpacked = self.playback.unpacked(ts_us, rewritten)
         if state is not None:
             header = (
                 f"Recording #{self.playback.recording_id}, PID {state.pid}, "
@@ -243,7 +279,8 @@ class MainWindow(QMainWindow):
             )
         else:
             header = f"Recording #{self.playback.recording_id}, no data at this time"
-        self.region_view.show_recorded_regions(regions, header, heads, rewritten)
+        self.region_view.show_recorded_regions(regions, header, heads, rewritten,
+                                               thread_starts, unpacked)
 
     # --- shutdown ---------------------------------------------------------
     def closeEvent(self, event) -> None:

@@ -15,14 +15,18 @@ installable package, a service, or a blocking security product.
 ## Layout
 
 - `memlapse/win32/`: ctypes wrappers over Win32 and NT calls (process table,
-  `VirtualQueryEx`, `ReadProcessMemory`, privileges). The only place that talks to the OS.
+  `VirtualQueryEx`, `ReadProcessMemory`, thread start addresses, privileges).
+  The only place that talks to the OS, and it opens two kinds of handle:
+  a process handle for queries and reads, and a query-only thread handle.
+  Neither ever asks for write, protection-change or thread-control access.
 - `memlapse/collectors/`: `QThread` pollers that call `win32/` and emit snapshots via Qt
   signals with latest-only delivery (`base.py`).
 - `memlapse/model/`, `memlapse/storage/`, `memlapse/services/`, `memlapse/analytics.py`:
   dataclasses, the SQLite schema and DAO, recording and playback, and the pure scoring
   and statistics functions. No Win32 calls here.
 - `memlapse/ui/`: the Qt widgets. Reads `win32/` only for privilege state, the
-  live region-map enumeration (run on a `QThreadPool` thread) and hex reads.
+  live region-map enumeration (run on a `QThreadPool` thread), hex reads and the
+  bounded region save.
 - `docs/ARCHITECTURE.md` explains the design and the heuristics; `docs/RESEARCH_NOTES.md`
   holds the reference reading and the ideas queued for later phases.
 
@@ -56,14 +60,16 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 255 passed with 100 percent line and branch
-coverage (2026-09-07).
+(2026-09-06); the test run is 320 passed with 100 percent line and branch
+coverage (2026-09-08).
 
 ## Conventions
 
-- Layering is strict in one direction: `ui` never calls Win32 except through the three
-  uses above (the privilege calls and the bounded 512-byte hex preview read run on the
-  GUI thread; live region enumeration runs on a `QThreadPool` thread), polling and
+- Layering is strict in one direction: `ui` never calls Win32 except through the four
+  uses above (the privilege calls, the bounded 512-byte hex preview read and the
+  region save, capped at `REGION_DUMP_MAX` and measured at about 10 ms for the full
+  16 MB, run on the GUI thread; live region enumeration and the thread start
+  addresses that go with it run on a `QThreadPool` thread), polling and
   recording live in `collectors` on their own `QThread`s and write storage there,
   playback reads storage on the GUI thread through `PlaybackEngine`, and `model`,
   `storage`, `services` and `analytics` import no Qt widgets and no Win32 (QtCore
@@ -94,8 +100,11 @@ coverage (2026-09-07).
   a genuinely unreachable line, a `# pragma: no cover` with a reason.
 - Widget tests use `pytest-qt`. `conftest.py` sets `QT_QPA_PLATFORM=offscreen` before
   PySide6 is imported, so the suite runs headless without any environment setup.
-- Win32 wrappers are tested against fakes; nothing in the suite needs elevation or a real
-  target process.
+- Win32 wrappers are tested against fakes, with one deliberate exception:
+  `test_win32_threads.py` asks for the start addresses of the test process's own
+  threads, because only a real call catches a wrong struct layout or a wrong
+  information class, and a fake would pass either way. Nothing in the suite needs
+  elevation, and nothing needs a target process other than itself.
 - CI (`.github/workflows/ci.yml`) runs the same install and `python -m pytest` on
   windows-latest with Python 3.14, on pull requests and pushes to main. Windows only,
   because `memlapse/win32` loads kernel32 and advapi32 at import time. The `gate` job
@@ -112,7 +121,9 @@ coverage (2026-09-07).
   confirm with `git ls-files --eol`.
 - A poller that emits faster than the GUI consumes will freeze the window. `collectors/
   base.py` drops a poll when the previous snapshot has not been dequeued and counts it in
-  `skipped`; keep that contract when adding a collector.
+  `skipped`; keep that contract when adding a collector. The same rule governs telling
+  the GUI about the drops: the total goes out on `dropped` alongside a delivered
+  snapshot, never once per drop, since a blocked consumer would queue every one of them.
 - Recordings are stored per user under `%LOCALAPPDATA%\Memlapse\memlapse.db`. Recordings
   made under the old name live in a `MemDo` folder beside it and are not picked up.
 - `git grep -P` handles Unicode escapes; plain `grep -P` on this machine does not, and

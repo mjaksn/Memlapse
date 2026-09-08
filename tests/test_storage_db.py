@@ -88,6 +88,9 @@ def test_connect_migrates_old_database(tmp_db):
         tables = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
         assert "head" in tables
+        # A table added since the database was made appears on open, with
+        # no migration step of its own.
+        assert "thread_snapshot" in tables
         # The old recording still reads back through the legacy table, and
         # carries no hash for the detector to mistake for a change.
         dao = Dao(conn)

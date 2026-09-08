@@ -271,3 +271,90 @@ def test_playback_seek_scores_rewritten_regions(main_window):
     assert model.data(model.index(0, 5), Qt.DisplayRole) == "65"
     win._on_seek(1_000)  # first sample has nothing to compare with: 50
     assert model.data(model.index(0, 5), Qt.DisplayRole) == "50"
+
+
+# --- dropped polls are surfaced, not swallowed -----------------------------
+def test_status_bar_reports_dropped_polls(main_window, make_process):
+    win, _ = main_window
+    win.collector.updated.emit([make_process(pid=1)])
+    win.collector.dropped.emit(3)
+    assert "3 process polls dropped" in win._status_label.text()
+
+
+def test_status_bar_names_the_stream_that_fell_behind(main_window, make_process):
+    """Both collectors drop independently; a silent one is indistinguishable
+    from one that is keeping up."""
+    win, _ = main_window
+    win.collector.updated.emit([make_process(pid=1)])
+    win.system_collector.dropped.emit(2)
+    text = win._status_label.text()
+    assert "2 system polls dropped" in text
+    assert "process polls" not in text
+    win.collector.dropped.emit(4)
+    assert ("1 processes, 4 process polls dropped, 2 system polls dropped"
+            == win._status_label.text())
+
+
+def test_status_bar_is_quiet_while_nothing_is_dropped(main_window, make_process):
+    win, _ = main_window
+    win.collector.updated.emit([make_process(pid=1), make_process(pid=2)])
+    assert win._status_label.text() == "2 processes"
+
+
+def test_a_drop_during_playback_leaves_the_recording_status_alone(main_window,
+                                                                  make_process):
+    """The collectors keep running in playback, where the line is not theirs."""
+    win, _ = main_window
+    win.collector.updated.emit([make_process(pid=1)])
+    win._mode = "playback"
+    win._status_label.setText("WS 12.0 MB  |  7 threads")
+    win.collector.dropped.emit(5)
+    assert win._status_label.text() == "WS 12.0 MB  |  7 threads"
+    win._enter_live_mode()   # returning to live shows the total that was kept
+    assert "5 process polls dropped" in win._status_label.text()
+
+
+# --- a recorded thread start reaches the region view -----------------------
+def test_playback_seek_scores_a_recorded_thread_start(main_window):
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    win, db = main_window
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    conn = connect(db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 1_000)
+    dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 100, 50, 3), [region],
+                   None, {7: 0x40080})
+    dao.end_recording(rid, 2_000)
+    conn.close()
+
+    win._open_recording(rid)
+    win._on_seek(1_000)
+    model = win.region_view.model
+    assert model.data(model.index(0, 5), Qt.DisplayRole) == "75"  # 50 + 25
+
+
+# --- a decrypting payload scores on both temporal signals ------------------
+def test_playback_seek_scores_an_unpacking_region(main_window):
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region,
+    )
+    win, db = main_window
+    packed, code = bytes(range(256)), b"\x48\x8b\x05\x01" * 64
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    conn = connect(db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 1_000)
+    for ts, head in ((1_000, packed), (2_000, code)):
+        dao.add_sample(rid, ts, ProcState(ts, 1000, 100, 50, 3), [region],
+                       {0x40000: head})
+    dao.end_recording(rid, 3_000)
+    conn.close()
+
+    win._open_recording(rid)
+    win._on_seek(2_000)
+    model = win.region_view.model
+    assert model.data(model.index(0, 5), Qt.DisplayRole) == "85"  # 50 + 15 + 20

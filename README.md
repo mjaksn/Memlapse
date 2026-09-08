@@ -23,10 +23,12 @@ analyst scrub back to the moment the memory changed.
   its regions and footprint evolved.
 - **Phase 6**, injection heuristics: each executable region gets a 0 to 100
   score (unbacked private or mapped executable memory, RWX, PE header, NOP
-  sled, high entropy) shown as a Score column with a heat tint and a reason
-  tooltip in the region view. In playback the score also rises for a region
-  whose code was rewritten in place since the previous sample, the trace an
-  injector leaves when it overwrites executable memory that already exists.
+  sled, high entropy, and a thread whose start address lands in memory no
+  image backs) shown as a Score column with a heat tint and a reason tooltip
+  in the region view, banded low, review or likely injection. In playback the
+  score also rises for a region whose code was rewritten in place since the
+  previous sample, the trace an injector leaves when it overwrites executable
+  memory that already exists.
 
 - **Dashboard**, a vivid, near-live overview tab: system RAM/swap gauges, a
   scrolling usage timeline, a heat-ranked top-process list (click to drill into
@@ -39,7 +41,8 @@ Next: per-thread memory activity via ETW (Phase 5).
 1. Open the **Forensic Monitor** tab (the app starts on the Dashboard; clicking
    a process bar there also jumps to the monitor), then select a process (left)
    to inspect its live memory map (right).
-2. Click **● Record** to sample it over time; **■ Stop** when done.
+2. Click **● Record** to sample it over time; **■ Stop** when done. Right-click
+   a region to save its bytes for a disassembler or a YARA rule.
 3. **Open Recording ▾** → pick a recording to enter playback, then drag the
    timeline (or press ▶) to replay it. **Live** returns to real-time mode.
 

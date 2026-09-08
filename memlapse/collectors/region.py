@@ -1,8 +1,9 @@
 """RegionSampler, records a process's memory map over time.
 
 Runs on its own QThread. Each tick it captures process-wide stats (working
-set, private bytes, thread count) plus the full VirtualQueryEx region map, and
-writes them as one sample to SQLite. This is the process-wide sampling that
+set, private bytes, thread count), the full VirtualQueryEx region map, and the
+Win32 start address of every thread it can query, and writes them as one
+sample to SQLite. This is the process-wide sampling that
 powers playback; per-thread attribution comes later via ETW.
 
 The sampler owns its own DB connection (opened inside run(), on the sampler
@@ -20,6 +21,7 @@ from ..analytics import is_executable
 from ..storage import connect
 from ..storage.dao import Dao, ProcState
 from ..win32.memory import ProcessAccessError, ProcessMemory
+from ..win32.threads import start_addresses
 
 #: Bytes read from the start of each executable region for content heuristics
 #: (PE header, NOP sled, entropy). Enough to see the tell without bloating the DB.
@@ -90,7 +92,12 @@ class RegionSampler(QThread):
         with ProcessMemory(self.pid, want_read=True) as pm:
             regions = pm.regions()
             heads = self._read_heads(pm, regions)
-        dao.add_sample(rec_id, ts, state, regions, heads)
+            # Inside the handle, so one pinned instance supplies the whole
+            # sample: released here, the pid could be reused between the map
+            # and the thread walk and the two halves would describe different
+            # processes. Off the GUI thread, like every other read here.
+            thread_starts = start_addresses(self.pid)
+        dao.add_sample(rec_id, ts, state, regions, heads, thread_starts)
         self.sampled.emit(ts, len(regions))
 
     @staticmethod

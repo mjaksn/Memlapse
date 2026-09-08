@@ -25,6 +25,23 @@ def test_open_and_enumerate_self():
         assert isinstance(data, bytes) and len(data) > 0
 
 
+def test_creation_time_identifies_this_instance():
+    """Real call: the layout has to be right, and the value has to be sane."""
+    with ProcessMemory(os.getpid()) as pm:
+        created = pm.creation_time()
+    # FILETIME ticks (100 ns since 1601). Anything after 2020 clears this.
+    assert created > 132_000_000_000_000_000
+    with ProcessMemory(os.getpid(), want_read=False) as limited:
+        assert limited.creation_time() == created  # the query-limited handle too
+
+
+def test_creation_time_failure_raises(monkeypatch):
+    monkeypatch.setattr(memory, "_kernel32", FakeKernel(lambda access: 4321))
+    with ProcessMemory(1234) as pm:
+        with pytest.raises(ProcessAccessError):
+            pm.creation_time()
+
+
 def test_map_only_cannot_read():
     with ProcessMemory(os.getpid(), want_read=False) as pm:
         assert not pm.can_read
@@ -61,6 +78,9 @@ class FakeKernel:
 
     def GetCurrentProcess(self):
         return 1
+
+    def GetProcessTimes(self, handle, created, exited, kernel, user):
+        return 0  # simulated query failure
 
 
 def test_fallback_to_query_limited(monkeypatch):

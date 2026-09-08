@@ -8,7 +8,9 @@ that time, and can compare that sample with the one before it.
 
 from __future__ import annotations
 
-from ..analytics import rewritten_regions
+from ..analytics import (
+    regions_with_thread_starts, rewritten_regions, unpacked_regions,
+)
 from ..storage import connect
 from ..storage.dao import Dao, ProcState, RecordingRow
 from ..model.region import Region
@@ -72,3 +74,40 @@ class PlaybackEngine:
 
     def close(self) -> None:
         self._conn.close()
+
+    def thread_start_regions(self, ts_us: int) -> set[int]:
+        """Base addresses of regions a thread starts in, at or before ts_us.
+
+        Both halves come from the same anchored sample. Empty when nothing is
+        open, when the recording caught no thread addresses, or when every
+        start lands in a region that is gone from the map.
+        """
+        if self.recording_id is None:
+            return set()
+        anchor = self._dao.sample_at(self.recording_id, ts_us)
+        if anchor is None:
+            return set()
+        return regions_with_thread_starts(
+            self._dao.regions_at(self.recording_id, anchor),
+            self._dao.thread_starts_at(self.recording_id, anchor),
+        )
+
+    def unpacked(self, ts_us: int, changed: set[int]) -> set[int]:
+        """Of ``changed``, the regions whose entropy fell to code-like values.
+
+        Takes the rewritten set from :meth:`rewritten` rather than working it
+        out again, and reads no head content at all when that set is empty,
+        which is almost every seek.
+        """
+        if self.recording_id is None or not changed:
+            return set()
+        anchor = self._dao.sample_at(self.recording_id, ts_us)
+        previous = (None if anchor is None
+                    else self._dao.previous_sample_ts(self.recording_id, anchor))
+        if previous is None:
+            return set()
+        return unpacked_regions(
+            self._dao.heads_at(self.recording_id, previous),
+            self._dao.heads_at(self.recording_id, anchor),
+            changed,
+        )

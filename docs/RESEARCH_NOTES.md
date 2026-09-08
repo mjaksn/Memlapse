@@ -95,7 +95,7 @@ writable executable memory, how much, and whether it is `MEM_PRIVATE`,
 `MEM_MAPPED` or `MEM_IMAGE`) is a hardening view no single-process tool offers,
 and it reuses the existing region sampler across many PIDs at a low rate.
 
-### 1.5 Thread start addresses that fall outside any image. New
+### 1.5 Thread start addresses that fall outside any image. Shipped
 
 **Source.** Every variant of the Trovent tool executes its payload with a new
 thread in the target: `CreateRemoteThread`, then `New-NtThread`, then a direct
@@ -114,6 +114,19 @@ cheap, snapshot-level rule: a thread whose start address lies in a
 `MEM_PRIVATE` or unnamed region, or in an RWX region, is suspicious on its own
 and doubly so when that region also scores. It also gives the planned
 "filter playback to one thread" feature something to show before ETW exists.
+
+**Status.** Implemented in `win32/threads.py`, which reads each thread id
+from the bulk table and then asks `NtQueryInformationThread` for the Win32
+start address one thread at a time. The bulk table's own `StartAddress` is
+no use: it holds the kernel start routine, and Windows zeroes it for an
+unelevated caller. `analytics.regions_with_thread_starts` maps the addresses
+onto the region map and `score_region` adds `THREAD_START_POINTS` (25) when
+the containing region is executable and not image-backed, which puts a
+private region with a thread on it at 75, the likely-injection band, on
+those two signals alone. Live mode reads the addresses on the pool thread
+and recordings store them per sample in `thread_snapshot`. Opening another
+user's thread needs elevation; without it the addresses are unknown and the
+rule stays silent.
 
 ### 1.6 Weight findings by how valuable the host process is. New
 
@@ -169,8 +182,9 @@ the score rather than raise an alert on its own.
 their SHA-256 hash, and playback compares consecutive samples with
 `analytics.rewritten_regions`, adding 15 points to a rewritten private or
 mapped region and 40 to a rewritten image region, where the benign
-explanation is rarer but includes an EDR's own hooks, which is why 40 sits
-just under the review threshold. See the scoring table in ARCHITECTURE.md.
+explanation is rarer but includes an EDR's own hooks, which is why 40 lands
+in the review band rather than the likely-injection one. See the scoring
+table in ARCHITECTURE.md.
 
 ### 2.2 Watch protection changes. Corroborates
 
@@ -183,7 +197,7 @@ Indicator"].
 **Implication.** Both statements support the planned `score_transition`
 detector and the weight already given to unbacked executable memory.
 
-### 2.3 Falling entropy is in-memory unpacking. New
+### 2.3 Falling entropy is in-memory unpacking. Shipped
 
 **Source.** "While suspicious files can be hidden via encryption and packing,
 all processes are visible in memory at run-time" [K22, §1.3]. "Polymorphic and
@@ -196,7 +210,17 @@ per byte to code-like values (roughly 5.5 to 6.5) is a payload decrypting
 itself in place. Store the head entropy per sample (one float per region) and
 add a transition rule alongside RW-to-RX.
 
-### 2.4 Catch short-lived processes and record lineage at creation. New
+**Status.** Implemented as `analytics.unpacked_regions`, adding
+`UNPACKED_POINTS` (20) when a head's entropy falls from `ENTROPY_PACKED`
+(7.2) to `ENTROPY_CODE_MAX` (6.5) or below. No float is stored: heads are
+already deduplicated by content, so entropy is computed from the two heads
+at read time, and only for the regions the rewrite detector already flagged,
+which is the only set where the content can have moved at all. It stacks
+with the rewrite, so a private region that decrypted itself scores 85. This
+is playback only: head bytes are captured by the recorder alone, so the live
+view has no earlier content to compare and the rule stays silent there.
+
+### 2.4 Catch short-lived processes and record lineage at creation. Part shipped
 
 **Source.** Kovter "kills itself and makes regsvr32.exe its parent process as
 soon as the process is created", after which "malicious URL connections will
@@ -213,6 +237,14 @@ would let Memlapse record every process that ever existed during a recording,
 build the parent-child tree at creation time, and flag known-bad pairs. The
 process table itself should gain parent PID and command line regardless, since
 `NtQuerySystemInformation` already returns the parent.
+
+**Status.** Half shipped. The bulk query already returned
+`InheritedFromUniqueProcessId` and threw it away, so the process table now
+carries `parent_pid` and shows a sortable Parent column. Windows does not
+keep that field current, so it names the creator at creation time and may
+point at a pid that has since exited or been reused. The rest, the command
+line, a tree built at creation, and the ETW process events that would catch
+a process living for less than one poll, is still to do.
 
 ### 2.5 Compare a process against a known-good baseline of itself. New
 
@@ -286,7 +318,7 @@ motivation.
 
 ## 4. Data model, export and evidence handling
 
-### 4.1 Dump a region or a process to a file. New
+### 4.1 Dump a region or a process to a file. Part shipped
 
 **Source.** The incident workflow dumps "suspicious process memory for further
 analysis" with `windows.memmap --pid 1234 --dump` and captures a full memory
@@ -298,6 +330,16 @@ step 2].
 for the process (`MiniDumpWriteDump` with full memory) would hand evidence to
 YARA, a disassembler or Volatility without a second tool. Both are one
 `ReadProcessMemory` loop or one API call away from what exists.
+
+**Status.** Half shipped. Right-clicking a region in live mode offers "Save
+region bytes", which writes up to `REGION_DUMP_MAX` (16 MB) of it and says
+in the header when the cap truncated the save. Playback refuses, because a
+recording holds 256 bytes a region and a file made from that would look like
+a dump without being one, and so does a pid that has come to mean a different
+process since the map was read: bytes from whatever inherited the number
+would be evidence of nothing. The process minidump is not written: it needs
+`MiniDumpWriteDump` from dbghelp, which is a new dependency and a much
+larger artefact than anything the tool produces today.
 
 ### 4.2 Snapshot on alert. New
 
@@ -326,7 +368,7 @@ interval, and a hash of the recording) and a "export recording" action would
 make a recording something an analyst can hand over and someone else can
 replay and re-score with confidence.
 
-### 4.4 Tag reasons with ATT&CK technique IDs. New
+### 4.4 Tag reasons with ATT&CK technique IDs. Shipped
 
 **Source.** Each detection in the guide is mapped to a MITRE ATT&CK technique,
 "Mapping your detections to MITRE ATT&CK ensures coverage visibility and helps
@@ -337,6 +379,12 @@ is T1055.002, process injection T1055 [C, "Common Fileless Malware Techniques"].
 human-readable `reasons` shown in the region tooltip do not. Appending the
 technique ID to each reason string is a one-line change that makes exports
 readable by anyone who works from ATT&CK.
+
+**Status.** Implemented: every reason ends with its technique in square
+brackets, from the constants `ATTACK_INJECTION` (T1055), `ATTACK_REFLECTIVE`
+(T1620) and `ATTACK_PACKING` (T1027.002) in `analytics.py`, and the scoring
+table in ARCHITECTURE.md carries the same column. The RWX and NOP sled
+signals are deliberately left untagged: neither maps to a technique honestly.
 
 ### 4.5 Data-driven rules and portable findings. New
 
@@ -467,10 +515,13 @@ long relative to the product's direct relevance.
 banded 0 to 29 benign, 30 to 69 suspicious, 70 to 100 malicious, and 30 is
 also the cutoff for forwarding an event to correlation: "Suspicious or
 malicious file events (scoring 30 or above) are sent to Network Detection and
-Response" [V, p. 458, p. 486]. Memlapse's review threshold of 50 hides a band
-the product considers worth a second look. A three-band display (with 30 as
-the floor of "review") costs nothing and matches the additive scale already in
-use.
+Response" [V, p. 458, p. 486]. Memlapse had no threshold at all in the code:
+every non-zero score was tinted alike, so nothing told an analyst which of
+them was worth a second look. A three-band display (with 30 as the floor of
+"review") costs nothing and matches the additive scale already in use.
+**Shipped:** `RegionVerdict.band` returns low, review or likely injection from
+`REVIEW_SCORE` (30) and `LIKELY_SCORE` (75), and the band leads the region
+tooltip.
 
 **Separate confidence from severity. New.** Impact "is initially Confidence *
 Severity / 100" [V, p. 513]; severity is a property of the threat type,
@@ -549,7 +600,10 @@ storing both on the event avoids the same confusion.
 NOT_ENOUGH_BASELINE when they "could not report events because the baseline
 size was insufficient for event detection" [V, p. 214]. The dashboard's
 z-score spikes and least-squares leak rate should do the same instead of
-presenting a confident number from three points.
+presenting a confident number from three points. **Shipped:** the interpret
+strip reads "collecting baseline, N of 30 samples" until
+`MIN_INSIGHT_SAMPLES` have arrived, and states no rate or anomaly before
+then.
 
 **Statistics propose, rules confirm. Refines.** The traffic analytics engine
 "combines ML-driven behavior modeling with rule-based analytics" because "not
@@ -614,8 +668,10 @@ long recordings could downsample old samples the same way.
 events by category, and the sensor separates "Packets Dropped", meaning
 overwhelmed, from bypassed, meaning deliberately skipped [V, p. 214, p. 537].
 Memlapse's latest-only delivery discards intermediate samples by design;
-counting and showing skipped samples per collector makes that honest. The
-`skipped` counter in `collectors/base.py` exists; it is not yet surfaced.
+counting and showing skipped samples per collector makes that honest.
+**Shipped:** the `skipped` counter in `collectors/base.py` now reaches the
+status bar, which reads "N processes, M polls dropped" whenever M is above
+zero.
 
 **State your limits and warn at 90 percent. New.** The product publishes
 numeric ceilings (events per window, rows displayed, file size analysed) and

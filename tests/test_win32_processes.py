@@ -41,7 +41,7 @@ def _entries(specs):
     keep = []
     size = ctypes.sizeof(SYSTEM_PROCESS_INFORMATION)
     raw = bytearray()
-    for i, (pid, name, threads, wset, pagefile, created) in enumerate(specs):
+    for i, (pid, name, threads, wset, pagefile, created, *rest) in enumerate(specs):
         e = SYSTEM_PROCESS_INFORMATION()
         e.NextEntryOffset = 0 if i == len(specs) - 1 else size
         e.NumberOfThreads = threads
@@ -49,6 +49,7 @@ def _entries(specs):
         e.PagefileUsage = pagefile
         e.CreateTime = created
         e.UniqueProcessId = pid or None
+        e.InheritedFromUniqueProcessId = (rest[0] if rest else 0) or None
         if name:
             wbuf = ctypes.create_unicode_buffer(name)
             keep.append(wbuf)
@@ -78,7 +79,7 @@ class FakeNtdll:
 def test_parses_entries_after_growing_buffer(monkeypatch):
     payload, _keep = _entries([
         (0, "", 4, 8192, 0, 0),
-        (4242, "fake.exe", 7, 1_000_000, 2_000_000, 123456789),
+        (4242, "fake.exe", 7, 1_000_000, 2_000_000, 123456789, 600),
     ])
     fake = FakeNtdll([STATUS_INFO_LENGTH_MISMATCH, 0], payload, needed=len(payload))
     monkeypatch.setattr(procs, "_ntdll", fake)
@@ -89,6 +90,7 @@ def test_parses_entries_after_growing_buffer(monkeypatch):
     assert rows[1].num_threads == 7
     assert rows[1].wset_bytes == 1_000_000 and rows[1].private_bytes == 2_000_000
     assert rows[1].create_time == 123456789
+    assert rows[1].parent_pid == 600 and rows[0].parent_pid == 0
     # Second attempt used the reported size plus slack.
     assert fake.sizes[1] == len(payload) + procs._SLACK
 

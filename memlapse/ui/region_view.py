@@ -6,33 +6,50 @@ fly via ProcessMemory) and playback mode (region map and any captured region
 heads from SQLite; the heads, and the set of regions whose head changed since
 the previous sample, feed the Score column, and the hex panel shows a fixed
 note, since only the first 256 bytes of executable regions are recorded).
+
+Both modes also mark the regions a thread starts in: live from a per-thread
+query on the pool thread, playback from what the recording stored.
 """
 
 from __future__ import annotations
 
+import os
+import tempfile
+from contextlib import suppress
+from pathlib import Path
+
 from PySide6.QtCore import (
     QAbstractTableModel, QModelIndex, QObject, QRunnable, Qt, QThreadPool, Signal,
 )
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QAction, QColor, QFont
 from PySide6.QtWidgets import (
-    QLabel, QPlainTextEdit, QSplitter, QTableView, QVBoxLayout, QWidget,
+    QFileDialog, QLabel, QPlainTextEdit, QSplitter, QTableView, QVBoxLayout,
+    QWidget,
 )
 
-from ..analytics import RegionVerdict, score_region
+from ..analytics import RegionVerdict, regions_with_thread_starts, score_region
 from ..model.region import Region
 from ..win32.memory import ProcessAccessError, ProcessMemory
+from ..win32.threads import start_addresses
 from .hexdump import hexdump
 from .theme import heat_color
 
 #: How many bytes to read for the hex preview of a selected region.
 HEX_PREVIEW_BYTES = 512
 
+#: Most bytes one "save region bytes" writes. A region can be gigabytes, and
+#: the point of the action is to hand a payload to a disassembler or a YARA
+#: rule, not to mirror an address space. A truncated save says so.
+REGION_DUMP_MAX = 16 * 1024 * 1024
+
 
 class _RegionLoadSignals(QObject):
     """Signals for :class:`_RegionLoadTask` (QRunnable can't carry its own)."""
 
-    #: req_id, regions (list[Region]), readable
-    loaded = Signal(int, object, bool)
+    #: req_id, regions (list[Region]), thread-start region bases, the target's
+    #: creation time (with the pid, which instance this map came from),
+    #: readable
+    loaded = Signal(int, object, object, "qlonglong", bool)
     #: req_id, error message
     failed = Signal(int, str)
 
@@ -57,12 +74,23 @@ class _RegionLoadTask(QRunnable):
             with ProcessMemory(self._pid) as pm:
                 regions = pm.regions()
                 readable = pm.can_read
+                # Which instance this map describes. Every later read compares
+                # against it, since the pid alone can come to mean another
+                # process entirely.
+                created = pm.creation_time()
+                # Inside the handle, which is what pins the pid: released
+                # here, a target that exited could have its number reused and
+                # the replacement's threads mapped onto this region list.
+                # Also off the GUI thread: one handle per thread, query only.
+                started = regions_with_thread_starts(
+                    regions, start_addresses(self._pid).values())
         except ProcessAccessError as exc:
             self.signals.failed.emit(self._req_id, str(exc))
         except Exception as exc:  # never let a pool thread die silently
             self.signals.failed.emit(self._req_id, str(exc))
         else:
-            self.signals.loaded.emit(self._req_id, regions, readable)
+            self.signals.loaded.emit(self._req_id, regions, started, created,
+                                     readable)
 
 
 def _fmt_size(n: int) -> str:
@@ -113,25 +141,35 @@ class RegionTableModel(QAbstractTableModel):
                 red, green, blue = heat_color(verdict.score / 100.0)
                 return QColor(red, green, blue, 110)  # translucent over dark theme
             if role == Qt.ToolTipRole:
-                return "; ".join(verdict.reasons)
+                # Band first: the number alone does not say what to do with it.
+                return f"{verdict.band}: " + "; ".join(verdict.reasons)
         return None
 
     def set_regions(self, rows: list[Region],
                     heads: dict[int, bytes] | None = None,
-                    rewritten: set[int] | None = None) -> None:
+                    rewritten: set[int] | None = None,
+                    thread_starts: set[int] | None = None,
+                    unpacked: set[int] | None = None) -> None:
         """Replace the rows and score each one.
 
         ``heads`` carries captured bytes by base address and ``rewritten`` the
         base addresses whose head changed since the previous sample; both are
         empty in live mode, where only the structural signals apply.
+        ``thread_starts`` carries the base addresses a thread starts in, which
+        both modes can know, and ``unpacked`` those whose entropy fell to
+        code-like values, which needs two samples and so is playback only.
         """
         heads = heads or {}
         rewritten = rewritten or set()
+        thread_starts = thread_starts or set()
+        unpacked = unpacked or set()
         self.beginResetModel()
         self._rows = rows
         self._verdicts = [
             score_region(r, head=heads.get(r.base_addr, b""),
-                         rewritten=r.base_addr in rewritten)
+                         rewritten=r.base_addr in rewritten,
+                         thread_start=r.base_addr in thread_starts,
+                         unpacked=r.base_addr in unpacked)
             for r in rows
         ]
         self.endResetModel()
@@ -146,6 +184,10 @@ class RegionView(QWidget):
         self._pid: int | None = None
         self._live = True  # live -> can read bytes; playback -> cannot
         self._readable = False
+        #: Creation time of the instance the current map came from. With the
+        #: pid it identifies one process, which is what every later read is
+        #: checked against.
+        self._created = 0
 
         # Live region maps are enumerated off the GUI thread. Each request gets
         # a monotonic id; only the newest one's result is applied, so rapidly
@@ -167,6 +209,12 @@ class RegionView(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.selectionModel().currentRowChanged.connect(self._on_region_selected)
+        # Right-click a row to keep its bytes. Live only: a recording holds
+        # the first 256 bytes of executable regions, which is not a dump.
+        self.save_action = QAction("Save region bytes\u2026", self)
+        self.save_action.triggered.connect(self.save_selected_region)
+        self.table.setContextMenuPolicy(Qt.ActionsContextMenu)
+        self.table.addAction(self.save_action)
         # Clearing the region list should not leave a stale hex dump behind
         # (e.g. when switching back to Live mode).
         self.model.modelReset.connect(self._on_model_reset)
@@ -204,12 +252,14 @@ class RegionView(QWidget):
         self._pool.start(task)
 
     def _on_regions_loaded(self, req_id: int, regions: list[Region],
+                           thread_starts: set[int], created: int,
                            readable: bool) -> None:
         if req_id != self._load_seq or self._pending is None:
             return  # a newer selection (or a mode switch) superseded this load
         pid, name = self._pending
         self._readable = readable
-        self.model.set_regions(regions)
+        self._created = created
+        self.model.set_regions(regions, thread_starts=thread_starts)
         note = "" if readable else "  (no read access, map only)"
         self.header.setText(f"{name} ({pid}): {len(regions)} regions{note}")
 
@@ -223,14 +273,17 @@ class RegionView(QWidget):
     # --- playback mode: region map from storage, no live reads -------------
     def show_recorded_regions(self, regions: list[Region], header: str,
                               heads: dict[int, bytes] | None = None,
-                              rewritten: set[int] | None = None) -> None:
+                              rewritten: set[int] | None = None,
+                              thread_starts: set[int] | None = None,
+                              unpacked: set[int] | None = None) -> None:
         self._pid = None
         self._live = False
         # Invalidate any in-flight live enumeration so it can't overwrite the
         # recorded map when it finishes.
         self._load_seq += 1
         self._pending = None
-        self.model.set_regions(regions, heads, rewritten)
+        self.model.set_regions(regions, heads, rewritten, thread_starts,
+                               unpacked)
         self.header.setText(header)
         self.hex.setPlainText(
             "(hex preview is live only; a recording keeps the first 256 bytes of "
@@ -240,6 +293,21 @@ class RegionView(QWidget):
     def _on_model_reset(self) -> None:
         if self.model.rowCount() == 0:
             self.hex.clear()
+
+    def _same_instance(self, pm: ProcessMemory) -> bool:
+        """Is the handle on the process the region map was read from?
+
+        Windows reuses pids. A target that exits between the map being read
+        and an analyst asking for bytes can be replaced by something unrelated
+        under the same number, and those bytes would then be filed under the
+        old selection. The handle is already open here, which is what pins the
+        pid, so comparing creation times closes the window rather than
+        narrowing it.
+        """
+        return pm.creation_time() == self._created
+
+    #: Shown when the pid no longer names the process the map came from.
+    _STALE = "process {pid} has exited; the pid now belongs to another process"
 
     def _on_region_selected(self, current: QModelIndex, _prev: QModelIndex) -> None:
         region = self.model.region_at(current.row()) if current.isValid() else None
@@ -256,8 +324,92 @@ class RegionView(QWidget):
             return
         try:
             with ProcessMemory(self._pid) as pm:
+                if not self._same_instance(pm):
+                    self.hex.setPlainText(self._STALE.format(pid=self._pid))
+                    return
                 data = pm.read(region.base_addr, min(HEX_PREVIEW_BYTES, region.size))
         except ProcessAccessError as exc:
             self.hex.setPlainText(f"read failed: {exc}")
             return
         self.hex.setPlainText(hexdump(data, region.base_addr))
+
+    # --- evidence: keep a region's bytes -----------------------------------
+    def save_selected_region(self) -> None:
+        """Write the selected region's bytes to a file the analyst chooses.
+
+        The header carries the outcome, since this view has no status bar of
+        its own and the analyst just asked for the thing being reported. Live
+        mode only: playback stores the first 256 bytes of executable regions
+        for scoring, which would make a misleading dump.
+        """
+        region = self.model.region_at(self.table.currentIndex().row())
+        if region is None:
+            self.header.setText("Select a region first, then save its bytes.")
+            return
+        if not self._live or self._pid is None:
+            self.header.setText(
+                "Saving bytes is live only; a recording keeps 256 bytes a region."
+            )
+            return
+        path, _filter = QFileDialog.getSaveFileName(
+            self, "Save region bytes",
+            f"{self._pid}-{region.base_addr:012x}.bin", "Raw bytes (*.bin)",
+        )
+        if not path:
+            return  # cancelled
+        wanted = min(region.size, REGION_DUMP_MAX)
+        try:
+            with ProcessMemory(self._pid) as pm:
+                if not self._same_instance(pm):
+                    # Refusing is the only honest answer: bytes from a
+                    # replacement process filed under this selection would be
+                    # evidence of nothing.
+                    self.header.setText(
+                        "save refused: " + self._STALE.format(pid=self._pid)
+                    )
+                    return
+                data = pm.read(region.base_addr, wanted)
+        except ProcessAccessError as exc:
+            self.header.setText(f"save failed: {exc}")
+            return
+        if not data:
+            self.header.setText(
+                f"0x{region.base_addr:012x}: nothing readable to save"
+            )
+            return
+        # Write beside the target and rename onto it once the bytes are all
+        # there. A read failure already reports through the header and a write
+        # failure has to as well, but it must not cost the analyst a file that
+        # was already on disk: writing in place would truncate the chosen file
+        # first, so a failure part way through would destroy it. Only the
+        # temporary file ever holds a partial region.
+        target = Path(path)
+        try:
+            handle, temp_name = tempfile.mkstemp(
+                dir=target.parent, prefix=f"{target.name}.", suffix=".part"
+            )
+            try:
+                with os.fdopen(handle, "wb") as out:
+                    out.write(data)
+                os.replace(temp_name, target)
+            except OSError:
+                with suppress(OSError):
+                    os.unlink(temp_name)
+                raise
+        except OSError as exc:
+            self.header.setText(f"save failed: {exc}")
+            return
+        # A short save has two different causes and the analyst needs to know
+        # which: the cap is our decision, a short read is the target's. They
+        # can happen to the same save, so each is reported on its own; folding
+        # them together would let our cap hide the target's short read.
+        notes = []
+        if region.size > REGION_DUMP_MAX:
+            notes.append(f"capped at {_fmt_size(REGION_DUMP_MAX)} of "
+                         f"{_fmt_size(region.size)}")
+        if len(data) < wanted:
+            notes.append(f"short read of {_fmt_size(wanted)}")
+        note = "".join(f", {n}" for n in notes)
+        self.header.setText(
+            f"saved {_fmt_size(len(data))} from 0x{region.base_addr:012x}{note}"
+        )

@@ -60,6 +60,17 @@ CREATE TABLE IF NOT EXISTS region_blob (
     content            BLOB NOT NULL
 );
 
+-- Win32 start address of every thread that could be queried, per sample.
+-- A sample with no rows is normal: unelevated, another user's threads will
+-- not open. The tid is kept because the Phase 5 ETW events join on it.
+CREATE TABLE IF NOT EXISTS thread_snapshot (
+    id           INTEGER PRIMARY KEY,
+    recording_id INTEGER NOT NULL REFERENCES recording(id) ON DELETE CASCADE,
+    ts_us        INTEGER NOT NULL,
+    tid          INTEGER NOT NULL,
+    start_addr   INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS mem_event (
     id           INTEGER PRIMARY KEY,
     recording_id INTEGER NOT NULL REFERENCES recording(id) ON DELETE CASCADE,
@@ -73,5 +84,6 @@ CREATE TABLE IF NOT EXISTS mem_event (
 
 CREATE INDEX IF NOT EXISTS ix_procsnap_rec_ts   ON process_snapshot(recording_id, ts_us);
 CREATE INDEX IF NOT EXISTS ix_regionsnap_rec_ts ON region_snapshot(recording_id, ts_us);
+CREATE INDEX IF NOT EXISTS ix_threadsnap_rec_ts ON thread_snapshot(recording_id, ts_us);
 CREATE INDEX IF NOT EXISTS ix_memevent_rec_ts   ON mem_event(recording_id, ts_us);
 CREATE INDEX IF NOT EXISTS ix_memevent_rec_tid  ON mem_event(recording_id, tid, ts_us);

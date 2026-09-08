@@ -288,9 +288,144 @@ def test_score_region_rewritten_private_adds_points():
 def test_score_region_rewritten_image_weighs_more():
     v = score_region(_snap(type=_IMAGE), rewritten=True)
     assert v.score == IMAGE_REWRITTEN_POINTS
-    assert v.reasons == ("image code rewritten in memory (inline hook or module stomping)",)
+    assert v.reasons == (
+        "image code rewritten in memory (inline hook or module stomping) [T1055]",
+    )
 
 
 def test_score_region_rewritten_ignored_for_non_executable():
     v = score_region(_snap(protect=_RW), rewritten=True)
     assert v.score == 0 and v.reasons == ()
+
+
+# --- ATT&CK technique tags on the reason strings ---------------------------
+def test_reasons_carry_their_attack_technique():
+    from memlapse.analytics import (
+        ATTACK_INJECTION, ATTACK_PACKING, ATTACK_REFLECTIVE,
+    )
+    v = score_region(_snap(), head=b"MZ" + bytes(range(256)))
+    tagged = {r.rsplit("[", 1)[-1].rstrip("]") for r in v.reasons if r.endswith("]")}
+    assert tagged == {ATTACK_INJECTION, ATTACK_REFLECTIVE, ATTACK_PACKING}
+    mapped = score_region(_snap(type=MEM_MAPPED))
+    assert mapped.reasons[0].endswith(f"[{ATTACK_INJECTION}]")
+
+
+def test_rwx_and_nop_sled_carry_no_technique():
+    """Neither maps to an ATT&CK technique, so neither invents one."""
+    reasons = score_region(_snap(protect=PAGE_EXECUTE_READWRITE), head=b"\x90" * 64).reasons
+    assert [r for r in reasons if not r.endswith("]")] == [
+        "writable + executable (RWX)", "NOP sled",
+    ]
+
+
+# --- triage bands ----------------------------------------------------------
+def test_verdict_band_edges():
+    from memlapse.analytics import LIKELY_SCORE, REVIEW_SCORE
+    band = lambda score: RegionVerdict(0, 0, score, ()).band
+    assert band(0) == ""
+    assert band(1) == "low"
+    assert band(REVIEW_SCORE - 1) == "low"
+    assert band(REVIEW_SCORE) == "review"
+    assert band(LIKELY_SCORE - 1) == "review"
+    assert band(LIKELY_SCORE) == "likely injection"
+    assert band(100) == "likely injection"
+
+
+def test_rewritten_image_region_lands_in_the_review_band():
+    """40 points is deliberately review, not likely injection: EDR hooks live here."""
+    assert score_region(_snap(type=_IMAGE), rewritten=True).band == "review"
+
+
+# --- thread start addresses ------------------------------------------------
+def test_regions_with_thread_starts_matches_the_containing_region():
+    from memlapse.analytics import regions_with_thread_starts
+    regions = [_snap(base=0x1000, size=0x1000), _snap(base=0x9000, size=0x1000)]
+    assert regions_with_thread_starts(regions, [0x1500]) == {0x1000}
+    assert regions_with_thread_starts(regions, [0x1000]) == {0x1000}   # first byte
+    assert regions_with_thread_starts(regions, [0x1FFF]) == {0x1000}   # last byte
+    assert regions_with_thread_starts(regions, [0x2000]) == set()      # one past
+    assert regions_with_thread_starts(regions, [0x1500, 0x9500]) == {0x1000, 0x9000}
+
+
+def test_regions_with_thread_starts_ignores_addresses_in_no_region():
+    """The map and the thread list are read a moment apart."""
+    from memlapse.analytics import regions_with_thread_starts
+    assert regions_with_thread_starts([_snap()], [0xDEAD0000]) == set()
+    assert regions_with_thread_starts([], [0x1000]) == set()
+    # Below every region, and in the gap between two of them.
+    regions = [_snap(base=0x1000, size=0x1000), _snap(base=0x9000, size=0x1000)]
+    assert regions_with_thread_starts(regions, [0x500]) == set()
+    assert regions_with_thread_starts(regions, [0x5000]) == set()
+
+
+def test_regions_with_thread_starts_does_not_assume_a_sorted_map():
+    """The lookup sorts, so a caller handing them over in any order is safe."""
+    from memlapse.analytics import regions_with_thread_starts
+    regions = [_snap(base=0x9000, size=0x1000), _snap(base=0x1000, size=0x1000),
+               _snap(base=0x5000, size=0x1000)]
+    assert regions_with_thread_starts(regions, [0x9500]) == {0x9000}
+    assert regions_with_thread_starts(regions, [0x1500]) == {0x1000}
+    assert regions_with_thread_starts(regions, [0x5500]) == {0x5000}
+
+
+def test_score_region_thread_start_in_unbacked_memory():
+    from memlapse.analytics import THREAD_START_POINTS
+    v = score_region(_snap(), thread_start=True)
+    assert v.score == 50 + THREAD_START_POINTS
+    assert v.band == "likely injection"
+    assert any("a thread starts here" in r for r in v.reasons)
+
+
+def test_score_region_thread_start_in_an_image_is_normal():
+    """Every legitimate thread starts inside a mapped image."""
+    v = score_region(_snap(type=_IMAGE), thread_start=True)
+    assert v.score == 0 and v.reasons == ()
+
+
+# --- falling entropy: a payload unpacking in place -------------------------
+_PACKED = bytes(range(256))                  # 8.0 bits/byte
+_CODE = b"\x48\x8b\x05\x01" * 64           # 2.0 bits/byte, no NOP run
+
+
+def test_unpacked_regions_flags_entropy_falling_to_code():
+    from memlapse.analytics import unpacked_regions
+    assert unpacked_regions({0x1000: _PACKED}, {0x1000: _CODE}, {0x1000}) == {0x1000}
+
+
+def test_unpacked_regions_ignores_the_other_direction_and_no_change():
+    from memlapse.analytics import unpacked_regions
+    # Code turning into noise is a fresh packed payload, not an unpacking.
+    assert unpacked_regions({0x1000: _CODE}, {0x1000: _PACKED}, {0x1000}) == set()
+    assert unpacked_regions({0x1000: _CODE}, {0x1000: _CODE}, {0x1000}) == set()
+
+
+def test_unpacked_regions_needs_both_heads():
+    from memlapse.analytics import unpacked_regions
+    assert unpacked_regions({}, {0x1000: _CODE}, {0x1000}) == set()
+    assert unpacked_regions({0x1000: _PACKED}, {}, {0x1000}) == set()
+    assert unpacked_regions({0x1000: _PACKED}, {0x1000: b""}, {0x1000}) == set()
+
+
+def test_unpacked_regions_does_not_read_a_short_read_as_unpacking():
+    """Fewer bytes readable is not the same as the bytes having changed."""
+    from memlapse.analytics import unpacked_regions
+    assert unpacked_regions({0x1000: _PACKED}, {0x1000: _PACKED[:1]},
+                            {0x1000}) == set()
+    assert unpacked_regions({0x1000: _PACKED}, {0x1000: _CODE[:16]},
+                            {0x1000}) == set()
+    # The same content at the same length still scores.
+    assert unpacked_regions({0x1000: _PACKED}, {0x1000: _CODE}, {0x1000}) == {0x1000}
+
+
+def test_unpacked_regions_only_looks_at_what_changed():
+    """Heads are stored by content, so an unchanged head cannot have moved."""
+    from memlapse.analytics import unpacked_regions
+    assert unpacked_regions({0x1000: _PACKED}, {0x1000: _CODE}, set()) == set()
+
+
+def test_score_region_unpacked_stacks_with_rewritten():
+    from memlapse.analytics import REWRITTEN_POINTS, UNPACKED_POINTS
+    v = score_region(_snap(), head=_CODE, rewritten=True, unpacked=True)
+    assert v.score == 50 + REWRITTEN_POINTS + UNPACKED_POINTS  # 85
+    assert v.band == "likely injection"
+    assert any("unpacked in place" in r for r in v.reasons)

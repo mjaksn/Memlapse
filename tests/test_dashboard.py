@@ -224,3 +224,27 @@ def test_export_rows_filters_to_selection(dash):
     dash.region.setRegion((-5.0, 0.0))  # only the newest (0s ago) sample
     rows = dash._export_rows()
     assert len(rows) == 1 and rows[0]["percent"] == 70.0
+
+
+# --- the interpret strip refuses to report from too little data ------------
+def test_insight_waits_for_a_baseline(dash):
+    from memlapse.ui.dashboard import MIN_INSIGHT_SAMPLES
+    for i in range(5):
+        dash._used.append(i * 1_000_000, float(i * 1024 * 1024))
+        dash._percent.append(i * 1_000_000, 50.0)
+    dash._refresh_insight()
+    text = dash.insight.text()
+    assert "collecting baseline" in text
+    assert f"5 of {MIN_INSIGHT_SAMPLES}" in text
+    assert "climbing" not in text  # a slope through five points is not a finding
+    assert dash.ram_gauge._alert is False
+
+
+def test_insight_reports_once_the_baseline_is_full(dash):
+    from memlapse.ui.dashboard import MIN_INSIGHT_SAMPLES
+    for i in range(MIN_INSIGHT_SAMPLES):
+        dash._used.append(i * 1_000_000, 1000.0)
+        dash._percent.append(i * 1_000_000, 50.0)
+    dash._refresh_insight()
+    assert "collecting baseline" not in dash.insight.text()
+    assert "steady" in dash.insight.text()
