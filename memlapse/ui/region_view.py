@@ -201,7 +201,6 @@ class RegionView(QWidget):
         super().__init__(parent)
         self._pid: int | None = None
         self._live = True  # live -> can read bytes; playback -> cannot
-        self._readable = False
         #: Creation time of the instance the current map came from. With the
         #: pid it identifies one process, which is what every later read is
         #: checked against.
@@ -329,7 +328,6 @@ class RegionView(QWidget):
             self.header.setText(self._STALE.format(pid=pid))
             return
         self._created = created
-        self._readable = readable
         # The heads are compared directly, which is the same equality test the
         # stored hashes give playback and saves hashing every head a second.
         changed = rewritten_regions(self._prev_regions, self._prev_heads,
