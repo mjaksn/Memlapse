@@ -379,8 +379,11 @@ flowchart TD
     M --> W
     N --> W
     W -- yes --> WX["+25 writable+executable"]
-    W -- no --> C1{"head starts 'MZ'?"}
-    WX --> C1
+    W -- no --> TH{"a thread starts here,<br/>and not MEM_IMAGE?"}
+    WX --> TH
+    TH -- yes --> THP["+25 thread start in unbacked memory"]
+    TH -- no --> C1{"head starts 'MZ'?"}
+    THP --> C1
     C1 -- yes --> MZ["+20 PE header"]
     C1 -- no --> C2{"NOP run ≥ 16?"}
     MZ --> C2
@@ -388,8 +391,11 @@ flowchart TD
     C2 -- no --> C3{"entropy ≥ 7.2?"}
     NOP --> C3
     C3 -- yes --> EN["+10 packed/encrypted"]
-    C3 -- no --> R{"rewritten since previous sample?"}
-    EN --> R
+    C3 -- no --> U{"entropy fell<br/>packed to code-like?"}
+    EN --> U
+    U -- yes --> UP["+20 unpacked in place"]
+    U -- no --> R{"rewritten since previous sample?"}
+    UP --> R
     R -- "yes, MEM_IMAGE" --> RI["+40 image code rewritten"]
     R -- yes --> RW["+15 rewritten in place"]
     R -- no --> CAP["score = min(sum, 100)"]
@@ -407,9 +413,11 @@ flowchart TD
     subgraph collect["Collector (QThread)"]
         A["RegionSampler tick"] -->|VirtualQueryEx| B["regions: list[Region]"]
         A -->|"ReadProcessMemory<br/>(exec+readable only, 256B)"| C["heads: {base_addr: bytes}"]
+        A -->|"NtQueryInformationThread<br/>(per thread, query only)"| TB["thread_starts: {tid: addr}"]
     end
     B --> D["Dao.add_sample(regions, heads, thread_starts)"]
     C --> D
+    TB --> D
     subgraph store["SQLite (WAL)"]
         D -->|per-region row| E[(region_snapshot)]
         D -->|"if head present, once per distinct content"| F[(head)]
@@ -419,8 +427,13 @@ flowchart TD
     T --> TS["PlaybackEngine.thread_start_regions(ts)"]
     TS --> I
     F --> H["PlaybackEngine.heads(ts)"]
-    G --> I["RegionTableModel.set_regions(regions, heads)"]
+    F --> RW["PlaybackEngine.rewritten(ts)"]
+    RW --> UN["PlaybackEngine.unpacked(ts, rewritten)"]
+    F --> UN
+    G --> I["RegionTableModel.set_regions(regions, heads,<br/>rewritten, thread_starts, unpacked)"]
     H --> I
+    RW --> I
+    UN --> I
     I -->|"score_region per row"| J["RegionVerdict[]"]
     J --> K["Region view: Score column<br/>+ heat background + reason tooltip"]
 ```
