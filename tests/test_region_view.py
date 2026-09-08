@@ -846,6 +846,28 @@ def test_allowlisting_one_rule_still_tints_on_what_is_left(rmodel):
     assert not (colour.red() == colour.green() == colour.blue())
 
 
+def test_the_tint_comes_from_the_points_that_are_left(rmodel):
+    """Excusing a rule has to cool the row, not merely leave it coloured.
+
+    The test above asks only that the tint is not the allowlisted grey, which
+    the raw score would satisfy just as well. This pins which number paints
+    it: a region excused down to 30 has to look like a 30, or a mostly
+    forgiven JIT host would go on burning as brightly as a real finding.
+    """
+    from PySide6.QtCore import Qt
+    from memlapse.analytics import RULE_PRIVATE_EXEC
+    from memlapse.ui.theme import heat_color
+    region = _exec_private()
+    heads = {region.base_addr: b"MZ" + bytes(range(256))}
+    rmodel.set_regions([region], heads, allowed={RULE_PRIVATE_EXEC})
+    # 50 unbacked exec excused; 20 PE header and 10 entropy still counting.
+    assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == "80"  # raw, shown
+    colour = rmodel.data(rmodel.index(0, 0), Qt.BackgroundRole)
+    rgb = (colour.red(), colour.green(), colour.blue())
+    assert rgb == heat_color(0.30)   # what is left
+    assert rgb != heat_color(0.80)   # what the raw score would have painted
+
+
 def test_the_header_does_not_count_an_excused_rewrite(qtbot, monkeypatch):
     """The band and the header have to agree, or the header shouts about
     findings the allowlist has already excused."""
