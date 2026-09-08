@@ -3,10 +3,13 @@
 Two modes:
 
 * **Live**, the ProcessCollector streams the process list; selecting a process
-  shows its live memory map (region view reads bytes on demand).
+  shows its live memory map, refreshed every second while on screen and scored
+  with the content signals, the regions rewritten while watching and the ones
+  that unpacked themselves there.
 * **Playback**, a recording is opened; the timeline scrubber drives the region
   view from stored samples (no live reads), including the regions rewritten
-  since the previous sample and the regions a thread started in.
+  since the previous sample, the ones that unpacked between samples and the
+  regions a thread started in.
 
 Recording is available in live mode: pick a process, hit Record, and a
 RegionSampler writes samples to SQLite until you stop.

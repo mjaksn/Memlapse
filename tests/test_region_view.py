@@ -165,7 +165,7 @@ def test_stale_load_result_is_ignored(qtbot, view, sample_regions, monkeypatch):
     _wait_regions(qtbot, view, 2)
     # Simulate the first (now stale) load arriving after a newer selection.
     view.show_live_process(5678, "other.exe")  # bumps _load_seq
-    view._on_regions_loaded(stale_req, [], set(), 1000, True)
+    view._on_regions_loaded(stale_req, [], {}, set(), 1000, True)
     assert "other.exe" in view.header.text()  # header reflects the newest request
 
 
@@ -521,6 +521,8 @@ def test_save_region_read_failure_and_empty_read(qtbot, view, sample_regions,
     view.save_selected_region()
     assert "save failed" in view.header.text()
     assert not target.exists()
+
+
 def test_save_region_reports_a_write_failure(qtbot, view, sample_regions,
                                              monkeypatch, tmp_path):
     """A full disk is reported, and the file already there is left alone."""
@@ -583,3 +585,228 @@ def test_save_region_reports_a_failure_before_the_write(qtbot, view,
     assert "save failed" in view.header.text()
     assert "Permission denied" in view.header.text()
     assert list(tmp_path.iterdir()) == []
+
+
+# --- live mode: heads, the refresh timer and the rewritten-while-watching set ---
+class _MutablePM:
+    """Fake ProcessMemory whose map and per-address reads a test can change."""
+
+    regions_now: list = []
+    heads_now: dict = {}
+    instance_created = 1000   # a test can move this to fake pid reuse
+
+    def __init__(self, pid, want_read=True):
+        self.pid = pid
+        self.can_read = True
+
+    def creation_time(self):
+        return type(self).instance_created
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def regions(self, include_free=False):
+        return list(type(self).regions_now)
+
+    def read(self, addr, size):
+        return type(self).heads_now.get(addr, b"")
+
+
+def _wait_load(qtbot, view):
+    qtbot.waitUntil(lambda: not view._in_flight)
+
+
+@pytest.fixture
+def live_view(qtbot, monkeypatch):
+    """A visible live view on a fake process, with the timer under test control."""
+    from PySide6.QtCore import Qt
+    _MutablePM.regions_now = [_exec_private()]
+    _MutablePM.heads_now = {0x40000: b"aaa"}
+    _MutablePM.instance_created = 1000
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", _MutablePM)
+    v = RegionView()
+    qtbot.addWidget(v)
+    v.show()
+    v.show_live_process(1234, "proc.exe")
+    v._refresh.stop()  # ticks are driven by hand so the sequence is deterministic
+    _wait_load(qtbot, v)
+
+    def score():
+        return v.model.data(v.model.index(0, 5), Qt.DisplayRole)
+
+    def tick():
+        v._on_refresh_tick()
+        _wait_load(qtbot, v)
+
+    return v, score, tick
+
+
+def test_load_task_emits_heads_of_executable_regions(qapp, monkeypatch):
+    _MutablePM.regions_now = [_exec_private(), _exec_private(0x50000)]
+    _MutablePM.heads_now = {0x40000: b"MZ"}
+    _MutablePM.instance_created = 1000
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", _MutablePM)
+    task = region_view_mod._RegionLoadTask(3, 1234)
+    got = []
+    task.signals.loaded.connect(lambda *args: got.append(args))
+    task.run()
+    assert got == [(3, _MutablePM.regions_now, {0x40000: b"MZ"}, set(),
+                    1000, True)]
+
+
+def test_live_heads_feed_the_content_signals(qtbot, monkeypatch):
+    _MutablePM.regions_now = [_exec_private()]
+    _MutablePM.heads_now = {0x40000: b"MZ" + b"\x00" * 8}
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", _MutablePM)
+    from PySide6.QtCore import Qt
+    v = RegionView()
+    qtbot.addWidget(v)
+    v.show_live_process(1234, "proc.exe")
+    assert v._refresh.isActive()  # live mode refreshes on the timer
+    _wait_load(qtbot, v)
+    assert v.model.data(v.model.index(0, 5), Qt.DisplayRole) == "70"  # 50 + 20 MZ
+    assert "rewritten" not in v.header.text()
+
+
+def test_refresh_flags_rewritten_code_and_keeps_the_flag(live_view):
+    v, score, tick = live_view
+    assert score() == "50"
+    tick()  # same bytes: nothing changed
+    assert score() == "50"
+    _MutablePM.heads_now = {0x40000: b"bbb"}
+    tick()  # bytes changed in place: 50 + 15
+    assert score() == "65"
+    assert "1 rewritten while watching" in v.header.text()
+    tick()  # unchanged since, but still flagged while the region is there
+    assert score() == "65"
+    _MutablePM.regions_now = [_exec_private(0x50000)]
+    _MutablePM.heads_now = {0x50000: b"ccc"}
+    tick()  # the rewritten region is gone: the flag goes with it
+    assert v._live_rewritten == set()
+    assert "rewritten" not in v.header.text()
+
+
+def test_reselecting_a_process_starts_the_history_afresh(qtbot, live_view):
+    v, score, tick = live_view
+    _MutablePM.heads_now = {0x40000: b"bbb"}
+    tick()
+    assert v._live_rewritten == {0x40000}
+    v.show_live_process(1234, "proc.exe")  # same pid, new watch
+    assert v._live_rewritten == set() and v._prev_heads == {}
+    v._refresh.stop()
+    _wait_load(qtbot, v)
+    assert score() == "50"  # the first load of a watch has nothing to compare
+
+
+def test_refresh_tick_skips_when_hidden_or_busy(live_view):
+    v, score, tick = live_view
+    seq = v._load_seq
+    v._in_flight = True
+    v._on_refresh_tick()  # previous load still running: no backlog
+    assert v._load_seq == seq
+    v._in_flight = False
+    v.hide()
+    v._on_refresh_tick()  # not on screen: not worth a VirtualQueryEx walk
+    assert v._load_seq == seq
+
+
+def test_refresh_tick_stops_when_not_watching(live_view):
+    v, score, tick = live_view
+    v._refresh.start()
+    v._pid = None
+    v._on_refresh_tick()
+    assert not v._refresh.isActive()
+    v._refresh.start()
+    v._pid = 1234
+    v._live = False
+    v._on_refresh_tick()
+    assert not v._refresh.isActive()
+
+
+def test_refresh_keeps_selection_and_clears_hex_when_it_vanishes(live_view):
+    v, score, tick = live_view
+    v.table.selectRow(0)
+    assert "61 61 61" in v.hex.toPlainText()  # b"aaa" previewed
+    _MutablePM.heads_now = {0x40000: b"zzz"}
+    tick()
+    assert v.table.currentIndex().row() == 0  # still on the same region
+    assert "7a 7a 7a" in v.hex.toPlainText()  # and its preview was refreshed
+    _MutablePM.regions_now = [_exec_private(0x50000)]
+    tick()
+    assert v.hex.toPlainText() == ""  # the selected region is gone
+
+
+def test_load_failure_stops_the_refresh(qtbot, live_view, monkeypatch):
+    v, score, tick = live_view
+    v._refresh.start()
+
+    class Boom:
+        def __init__(self, *a, **k):
+            raise ProcessAccessError("gone")
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", Boom)
+    v._on_refresh_tick()
+    qtbot.waitUntil(lambda: "cannot open" in v.header.text())
+    assert not v._refresh.isActive()
+    assert not v._in_flight
+
+
+def test_playback_stops_the_refresh(live_view):
+    v, score, tick = live_view
+    v._refresh.start()
+    v.show_recorded_regions([], "Recording #1")
+    assert not v._refresh.isActive()
+    assert not v._in_flight
+
+
+def test_live_entropy_fall_scores_as_unpacked(live_view):
+    """A head that decrypts itself in place stacks the unpack on the rewrite."""
+    from memlapse.analytics import (
+        ENTROPY_CODE_MAX, ENTROPY_PACKED, shannon_entropy,
+    )
+    v, score, tick = live_view
+    packed = bytes(range(256))                     # 8.0 bits per byte
+    code = bytes(range(64)) * 4                    # 6.0 bits per byte
+    assert shannon_entropy(packed) >= ENTROPY_PACKED
+    assert shannon_entropy(code) <= ENTROPY_CODE_MAX
+    _MutablePM.heads_now = {0x40000: packed}
+    tick()  # rewritten, and packed enough to score the entropy threshold too
+    assert score() == "75"  # 50 private + 15 rewritten + 10 high entropy
+    _MutablePM.heads_now = {0x40000: code}
+    tick()  # the payload decrypted itself: 50 + 15 rewritten + 20 unpacked
+    assert score() == "85"
+    assert v._live_unpacked == {0x40000}
+    tick()  # unchanged since, but the finding stays while the region is there
+    assert score() == "85"
+    _MutablePM.regions_now = [_exec_private(0x50000)]
+    _MutablePM.heads_now = {0x50000: code}
+    tick()  # the region is gone and so is its finding
+    assert v._live_unpacked == set()
+
+
+def test_a_refresh_onto_a_reused_pid_stops_instead_of_comparing(live_view):
+    """The rewrite rule must not fire on a stranger that inherited the pid."""
+    v, score, tick = live_view
+    tick()
+    assert v._created == 1000
+    _MutablePM.instance_created = 9999   # the target exited, the pid was reused
+    _MutablePM.heads_now = {0x40000: b"bbb"}   # a rewrite, if it were compared
+    tick()
+    assert v._live_rewritten == set()    # nothing is claimed about a stranger
+    assert "has exited" in v.header.text()
+    assert not v._refresh.isActive()    # and the watch is over
+    assert v.model.rowCount() == 1      # the target's last map is still there
+
+
+def test_watching_another_process_compares_it_with_itself(qtbot, live_view):
+    """A new selection has no creation time to be stale against."""
+    v, score, tick = live_view
+    tick()
+    _MutablePM.instance_created = 9999   # a different process this time
+    v.show_live_process(5678, "other.exe")
+    v._refresh.stop()
+    _wait_load(qtbot, v)
+    assert "has exited" not in v.header.text()
+    assert v._created == 9999

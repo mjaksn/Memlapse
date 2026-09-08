@@ -282,7 +282,7 @@ def test_rewritten_regions_checks_each_region_independently():
 def test_score_region_rewritten_private_adds_points():
     v = score_region(_snap(), rewritten=True)
     assert v.score == 50 + REWRITTEN_POINTS
-    assert any("rewritten since previous sample" in r for r in v.reasons)
+    assert any("rewritten in place" in r for r in v.reasons)
 
 
 def test_score_region_rewritten_image_weighs_more():

@@ -25,8 +25,9 @@ installable package, a service, or a blocking security product.
   dataclasses, the SQLite schema and DAO, recording and playback, and the pure scoring
   and statistics functions. No Win32 calls here.
 - `memlapse/ui/`: the Qt widgets. Reads `win32/` only for privilege state, the
-  live region-map enumeration (run on a `QThreadPool` thread), hex reads and the
-  bounded region save.
+  live region-map enumeration with its region head reads (run on a `QThreadPool`
+  thread, once a second while the view is on screen), hex reads and the bounded
+  region save.
 - `docs/ARCHITECTURE.md` explains the design and the heuristics; `docs/RESEARCH_NOTES.md`
   holds the reference reading and the ideas queued for later phases.
 
@@ -60,7 +61,7 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 320 passed with 100 percent line and branch
+(2026-09-06); the test run is 332 passed with 100 percent line and branch
 coverage (2026-09-08).
 
 ## Conventions
@@ -68,13 +69,14 @@ coverage (2026-09-08).
 - Layering is strict in one direction: `ui` never calls Win32 except through the four
   uses above (the privilege calls, the bounded 512-byte hex preview read and the
   region save, capped at `REGION_DUMP_MAX` and measured at about 10 ms for the full
-  16 MB, run on the GUI thread; live region enumeration and the thread start
-  addresses that go with it run on a `QThreadPool` thread), polling and
-  recording live in `collectors` on their own `QThread`s and write storage there,
-  playback reads storage on the GUI thread through `PlaybackEngine`, and `model`,
-  `storage`, `services` and `analytics` import no Qt widgets and no Win32 (QtCore
-  signals are allowed in `services` and `collectors`). Cross-thread hand-off is by Qt
-  signal only; no locks.
+  16 MB, run on the GUI thread; live region enumeration, its region head reads and
+  the thread start addresses that go with it run on a `QThreadPool` thread, once a
+  second while the view is on screen), polling and recording live in `collectors` on
+  their own `QThread`s and write storage there, playback reads storage on the GUI
+  thread through `PlaybackEngine`, and `model`, `storage`, `services` and
+  `analytics` import no Qt widgets and no Win32 (QtCore signals are allowed in
+  `services` and `collectors`). Cross-thread hand-off is by Qt signal only; no
+  locks.
 - Keep the GIL free while the GUI is busy: a collector must not spend most of its tick
   in Python-level per-process work. Prefer one bulk syscall (see `win32/processes.py`)
   and precomputed display strings in the model. The reasons are recorded in
@@ -124,6 +126,11 @@ coverage (2026-09-08).
   `skipped`; keep that contract when adding a collector. The same rule governs telling
   the GUI about the drops: the total goes out on `dropped` alongside a delivered
   snapshot, never once per drop, since a blocked consumer would queue every one of them.
+- A pid identifies a process only with its creation time. The live region view
+  re-reads the map once a second, so a target that exits mid-watch can have its
+  number taken by something else; a refresh that finds a different instance ends
+  the watch instead of adopting the map, or the temporal signals would compare
+  two unrelated processes and call the difference injected code.
 - Recordings are stored per user under `%LOCALAPPDATA%\Memlapse\memlapse.db`. Recordings
   made under the old name live in a `MemDo` folder beside it and are not picked up.
 - `git grep -P` handles Unicode escapes; plain `grep -P` on this machine does not, and

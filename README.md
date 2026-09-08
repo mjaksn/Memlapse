@@ -17,7 +17,8 @@ analyst scrub back to the moment the memory changed.
 
 - **Phase 1**, live process monitor (sortable, filterable table).
 - **Phase 2**, memory-map view: select a process to see its VirtualQueryEx
-  region map, click a region for a hex preview of its bytes.
+  region map, refreshed every second while on screen; click a region for a
+  hex preview of its bytes.
 - **Phase 3**, record a process's memory map over time to SQLite.
 - **Phase 4**, playback: scrub the recording with the timeline to replay how
   its regions and footprint evolved.
@@ -25,10 +26,12 @@ analyst scrub back to the moment the memory changed.
   score (unbacked private or mapped executable memory, RWX, PE header, NOP
   sled, high entropy, and a thread whose start address lands in memory no
   image backs) shown as a Score column with a heat tint and a reason tooltip
-  in the region view, banded low, review or likely injection. In playback the
-  score also rises for a region whose code was rewritten in place since the
-  previous sample, the trace an injector leaves when it overwrites executable
-  memory that already exists.
+  in the region view, banded low, review or likely injection. The score also
+  rises for a region whose code was rewritten in place, and again if its
+  entropy fell from packed to code-like, the traces an injector leaves when
+  it overwrites executable memory that already exists and when a payload
+  decrypts itself there. Both work in playback, between consecutive samples,
+  and in live mode, between one refresh and the next.
 
 - **Dashboard**, a vivid, near-live overview tab: system RAM/swap gauges, a
   scrolling usage timeline, a heat-ranked top-process list (click to drill into

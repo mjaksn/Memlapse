@@ -94,14 +94,14 @@ def test_sleep_remaining_runs_and_exits(qapp):
     assert time.monotonic() - start >= 0.01
 
 
-# --- _read_heads -----------------------------------------------------------
+# --- read_heads ------------------------------------------------------------
 from memlapse.model.region import (  # noqa: E402
     MEM_COMMIT, MEM_RESERVE, PAGE_EXECUTE_READ, PAGE_READWRITE, Region,
 )
 
 
 class _FakePM:
-    """Minimal ProcessMemory stand-in for _read_heads."""
+    """Minimal ProcessMemory stand-in for read_heads."""
 
     def __init__(self, can_read, data=b"\x90\x90"):
         self.can_read = can_read
@@ -119,7 +119,7 @@ def _exec(base):
 
 def test_read_heads_empty_when_no_read_access():
     pm = _FakePM(can_read=False)
-    assert RegionSampler._read_heads(pm, [_exec(0x1000)]) == {}
+    assert region_mod.read_heads(pm, [_exec(0x1000)]) == {}
     assert pm.reads == []  # never attempted a read
 
 
@@ -130,14 +130,14 @@ def test_read_heads_captures_executable_readable_regions():
         Region(0x2000, 4096, MEM_COMMIT, PAGE_READWRITE, 0x20000),  # not exec
         Region(0x3000, 4096, MEM_RESERVE, PAGE_EXECUTE_READ, 0x20000),  # not readable
     ]
-    heads = RegionSampler._read_heads(pm, regions)
+    heads = region_mod.read_heads(pm, regions)
     assert heads == {0x1000: b"MZ\x90"}
     assert pm.reads == [(0x1000, 256)]  # only the qualifying region was read
 
 
 def test_read_heads_skips_regions_that_read_empty():
     pm = _FakePM(can_read=True, data=b"")
-    assert RegionSampler._read_heads(pm, [_exec(0x1000)]) == {}
+    assert region_mod.read_heads(pm, [_exec(0x1000)]) == {}
 
 
 # --- thread start addresses are recorded with the sample -------------------

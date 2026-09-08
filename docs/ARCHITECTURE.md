@@ -159,7 +159,8 @@ Each phase is usable on its own.
   `NtQuerySystemInformation` query, refresh timer, sort/filter. A mini
   Process Explorer on its own.
 - **Phase 2, region view:** select a process → `VirtualQueryEx` map + hex read
-  of a region. Read-only forensic inspection.
+  of a region, refreshed once a second while the view is on screen.
+  Read-only forensic inspection.
 - **Phase 3, recording:** RegionSampler writes time-series snapshots to SQLite;
   a timeline widget.
 - **Phase 4, playback:** scrub the timeline; UI rebuilds process/region state
@@ -328,9 +329,9 @@ combination is the highest-signal heuristic in this space.[^malfind]
 | **Content** | `MZ` header at offset 0 | +20 | yes | T1620 | PE image in memory → reflective DLL injection[^t1620] |
 | Content | NOP sled (≥ `NOP_SLED_MIN` = 16 × `0x90`) | +10 | yes | none | Classic shellcode landing zone |
 | Content | Shannon entropy ≥ `ENTROPY_PACKED` = 7.2 bits/byte | +10 | yes | T1027.002 | Packed or encrypted payload[^t1027] |
-| **Temporal** | Head rewritten since the previous sample, region otherwise unchanged (`REWRITTEN_POINTS`) | +15 | recording | T1055 | Code written into an existing executable region, with no allocation or protection change to see |
-| Temporal | The same in a `MEM_IMAGE` region (`IMAGE_REWRITTEN_POINTS`) | +40 | recording | T1055 | Inline hook or module stomping; legitimate image code is not rewritten in place |
-| Temporal | Head entropy fell from `ENTROPY_PACKED` to `ENTROPY_CODE_MAX` = 6.5 or below (`UNPACKED_POINTS`) | +20 | recording | T1027.002 | A packed payload that decrypted itself in place; stacks with the rewrite it implies |
+| **Temporal** | Head rewritten since the previous sample or live refresh, region otherwise unchanged (`REWRITTEN_POINTS`) | +15 | yes | T1055 | Code written into an existing executable region, with no allocation or protection change to see |
+| Temporal | The same in a `MEM_IMAGE` region (`IMAGE_REWRITTEN_POINTS`) | +40 | yes | T1055 | Inline hook or module stomping; legitimate image code is not rewritten in place |
+| Temporal | Head entropy fell from `ENTROPY_PACKED` to `ENTROPY_CODE_MAX` = 6.5 or below (`UNPACKED_POINTS`) | +20 | yes | T1027.002 | A packed payload that decrypted itself in place; stacks with the rewrite it implies |
 
 Every reason string ends with its technique in square brackets, so the tooltip
 an analyst reads and any export of the same finding name it identically
@@ -394,7 +395,7 @@ flowchart TD
     C3 -- no --> U{"entropy fell<br/>packed to code-like?"}
     EN --> U
     U -- yes --> UP["+20 unpacked in place"]
-    U -- no --> R{"rewritten since previous sample?"}
+    U -- no --> R{"rewritten since previous look?"}
     UP --> R
     R -- "yes, MEM_IMAGE" --> RI["+40 image code rewritten"]
     R -- yes --> RW["+15 rewritten in place"]
@@ -462,16 +463,20 @@ mode, which writes up to `REGION_DUMP_MAX` of the selected region so the
 payload can go to a disassembler or a YARA rule (RESEARCH_NOTES.md 4.1).
 It is a read, like everything else here.
 
-Both the save and the hex preview check that the pid still names the process
-the map came from, by comparing `ProcessMemory.creation_time()` against the
-value captured with the map. Windows reuses pids, and an analyst can take a
-while between selecting a process and asking for its bytes; without the check
-a target that exited in between could hand back bytes belonging to whatever
-inherited its number, filed under the old selection. The comparison happens
-with the handle already open, which is what keeps the pid from being recycled
-between the check and the read. The save writes through a temporary file in
-the destination directory and renames onto the target, so a failure part way
-through cannot truncate a file that was already there.
+The save, the hex preview and every live refresh check that the pid still
+names the process the map came from, by comparing
+`ProcessMemory.creation_time()` against the value captured with the map.
+Windows reuses pids, and an analyst can take a while between selecting a
+process and asking for its bytes; without the check a target that exited in
+between could hand back bytes belonging to whatever inherited its number,
+filed under the old selection. The comparison happens with the handle already
+open, which is what keeps the pid from being recycled between the check and
+the read. A refresh that finds a different instance ends the watch rather than
+adopting the new map: comparing a stranger's heads against the watched
+process's would report every difference as code rewritten in place, which is
+the loudest thing this view can say. The save writes through a temporary file
+in the destination directory and renames onto the target, so a failure part
+way through cannot truncate a file that was already there.
 
 **Surface**, `ui/region_view.py`. `RegionTableModel` gained a **Score**
 column. On `set_regions(rows, heads)` it computes a `RegionVerdict` per row and:
@@ -481,16 +486,24 @@ column. On `set_regions(rows, heads)` it computes a `RegionVerdict` per row and:
   translucent so text stays legible on the dark theme), and
 - exposes the human-readable `reasons` as the row tooltip.
 
-Live mode scores structurally (no heads); playback scores with full content
-signals from the stored heads, plus the temporal signal below.
+Both modes score with the full content signals: live mode reads the head of
+each executable region on the pool thread alongside the map, playback reads
+the stored heads. Both also carry the temporal signals below, the rewrite and
+the entropy fall alike, live mode from one refresh to the next and playback
+from one sample to the next. Live mode keeps the previous refresh's head
+bytes to do it, 256 bytes per executable region, which is under 200 KiB for
+the largest process measured on this machine.
 
 ### Threading & performance notes
 
-- All memory reads happen on the **sampler `QThread`**, consistent with the
+- Memory reads happen on the **sampler `QThread`** when recording and on the
+  **`QThreadPool` task** that enumerates the live map, consistent with the
   project rule that storage/IO stay off the GUI thread. Thread start
   addresses cost one system-table query plus a handle open per thread, so
-  they are read there too, and on the `QThreadPool` task in live mode, never
-  on the GUI thread.
+  they are read in the same two places, never on the GUI thread. The live
+  view re-enumerates once a second (`LIVE_REFRESH_MS`) but only while it is
+  on screen and only when the previous load has finished, the same no-backlog
+  rule the collectors follow.
 - Storage cost: 32 bytes per *executable* region per tick for the hash, plus
   256 bytes once for each distinct head content. A region whose code does not
   change costs nothing new after its first sample, however long the recording.
@@ -498,7 +511,14 @@ signals from the stored heads, plus the temporal signal below.
   hashes as well as the anchored sample's, so a scrub costs about three region
   reads per step instead of one. The hashes query touches no blob content.
 - Scoring is O(head length) per region and runs on the GUI thread only at
-  `set_regions` time (per seek), which is negligible.
+  `set_regions` time (per seek or per live refresh), which is negligible. The
+  live change detector compares head bytes directly rather than hashing them,
+  and the entropy rule measures only the regions that changed on that
+  refresh, which is what keeps it affordable: a process that rewrote no
+  executable head since the last refresh costs it nothing at all. Measured
+  2026-09-08 on this machine, the largest process sampled held 716 executable
+  regions and changed none of them in a second; entropy over all 716 in one
+  tick, which needs every head to change at once, was 10 ms.
 
 ### Limitations & known evasions (stated honestly)
 
@@ -554,8 +574,14 @@ escalating.
 
 This is the detector the Trovent write-up in RESEARCH_NOTES.md motivates: an
 injector that overwrites an existing RWX region never allocates and never flips
-a protection, so the changed bytes are the only trace it leaves. Live mode does
-not run it yet; it needs two samples, and the live view has one.
+a protection, so the changed bytes are the only trace it leaves.
+
+Live mode runs the same function between one refresh and the next, keeping the
+previous refresh's regions and head bytes in memory. A live monitor has no
+scrub-back, so a change that showed for one tick and vanished would be a
+detector nobody sees: a region seen rewritten stays flagged, and counted in
+the header as "rewritten while watching", until it leaves the map or the
+analyst selects a process again, which starts the history afresh.
 
 ### Planned: temporal RW→RX transition detector
 
