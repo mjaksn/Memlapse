@@ -190,6 +190,35 @@ REWRITTEN_POINTS = 15
 #: place; an inline hook or module stomping is, so this carries more weight.
 IMAGE_REWRITTEN_POINTS = 40
 
+#: Stable identifier for each scoring rule. An allowlist entry names one of
+#: these to exempt a process from that rule and no other, and they will key
+#: rows in a recording, so treat them as schema: a shipped id is never
+#: renamed. The prose beside them can be reworded freely; the id cannot.
+RULE_PRIVATE_EXEC = "private-exec"
+RULE_MAPPED_EXEC = "mapped-exec"
+RULE_RWX = "rwx"
+RULE_THREAD_START = "thread-start"
+RULE_PE_HEADER = "pe-header"
+RULE_NOP_SLED = "nop-sled"
+RULE_HIGH_ENTROPY = "high-entropy"
+RULE_UNPACKED = "unpacked"
+RULE_REWRITTEN = "rewritten"
+RULE_IMAGE_REWRITTEN = "image-rewritten"
+
+
+@dataclass(frozen=True, slots=True)
+class Reason:
+    """One scoring rule that fired, with what it contributed.
+
+    ``text`` is the sentence an analyst reads. ``rule`` is the identifier
+    an allowlist entry names, and ``points`` is what the rule added, which
+    is what lets a suppressed rule be subtracted without scoring twice.
+    """
+
+    rule: str
+    text: str
+    points: int
+
 
 def is_executable(protect: int) -> bool:
     """True if ``protect`` grants execute and the page is not a guard page."""
@@ -234,7 +263,7 @@ class RegionVerdict:
     base_addr: int
     size: int
     score: int
-    reasons: tuple[str, ...]
+    reasons: tuple[Reason, ...]
 
     @property
     def suspicious(self) -> bool:
@@ -280,72 +309,59 @@ def score_region(region: Region, *, head: bytes = b"",
     if region.state != MEM_COMMIT or not is_executable(region.protect):
         return RegionVerdict(region.base_addr, region.size, 0, ())
 
-    score = 0
-    reasons: list[str] = []
+    reasons: list[Reason] = []
+
+    def fired(rule: str, points: int, text: str) -> None:
+        reasons.append(Reason(rule, text, points))
 
     # Structural: executable memory that is not backed by an image file is the
     # core injection tell (reflective loading, hollowing, raw shellcode).
     if region.type == MEM_PRIVATE:
-        score += 50
-        reasons.append(
-            f"executable private (unbacked) memory [{ATTACK_INJECTION}]"
-        )
+        fired(RULE_PRIVATE_EXEC, 50,
+              f"executable private (unbacked) memory [{ATTACK_INJECTION}]")
     elif region.type == MEM_MAPPED:
-        score += 30
-        reasons.append(
-            "executable mapped memory (possible module stomping) "
-            f"[{ATTACK_INJECTION}]"
-        )
+        fired(RULE_MAPPED_EXEC, 30,
+              "executable mapped memory (possible module stomping) "
+              f"[{ATTACK_INJECTION}]")
 
     if region.protect & _WRITE_EXEC:
-        score += 25
-        reasons.append("writable + executable (RWX)")
+        fired(RULE_RWX, 25, "writable + executable (RWX)")
 
     if thread_start and region.type != MEM_IMAGE:
-        score += THREAD_START_POINTS
-        reasons.append(
-            f"a thread starts here, in memory no image backs "
-            f"[{ATTACK_INJECTION}]"
-        )
+        fired(RULE_THREAD_START, THREAD_START_POINTS,
+              f"a thread starts here, in memory no image backs "
+              f"[{ATTACK_INJECTION}]")
 
     # Content: only meaningful when the region's head was actually read.
     if head[:2] == b"MZ":
-        score += 20
-        reasons.append(
-            f"PE header (MZ) in memory, reflective DLL [{ATTACK_REFLECTIVE}]"
-        )
+        fired(RULE_PE_HEADER, 20,
+              f"PE header (MZ) in memory, reflective DLL [{ATTACK_REFLECTIVE}]")
     if longest_nop_run(head) >= NOP_SLED_MIN:
-        score += 10
-        reasons.append("NOP sled")
+        fired(RULE_NOP_SLED, 10, "NOP sled")
     if head and shannon_entropy(head) >= ENTROPY_PACKED:
-        score += 10
-        reasons.append(f"high entropy (packed/encrypted) [{ATTACK_PACKING}]")
+        fired(RULE_HIGH_ENTROPY, 10,
+              f"high entropy (packed/encrypted) [{ATTACK_PACKING}]")
 
     # Temporal: the bytes changed but nothing about the region did. A loader
     # that overwrites an existing executable region never allocates and never
     # flips a protection, so this is the only signal it leaves. JIT engines
     # rewrite private code legitimately; image code is not rewritten at all.
     if unpacked:
-        score += UNPACKED_POINTS
-        reasons.append(
-            "entropy fell from packed to code-like, unpacked in place "
-            f"[{ATTACK_PACKING}]"
-        )
+        fired(RULE_UNPACKED, UNPACKED_POINTS,
+              "entropy fell from packed to code-like, unpacked in place "
+              f"[{ATTACK_PACKING}]")
 
     if rewritten:
         if region.type == MEM_IMAGE:
-            score += IMAGE_REWRITTEN_POINTS
-            reasons.append(
-                "image code rewritten in memory (inline hook or module "
-                f"stomping) [{ATTACK_INJECTION}]"
-            )
+            fired(RULE_IMAGE_REWRITTEN, IMAGE_REWRITTEN_POINTS,
+                  "image code rewritten in memory (inline hook or module "
+                  f"stomping) [{ATTACK_INJECTION}]")
         else:
-            score += REWRITTEN_POINTS
-            reasons.append(
-                "executable memory rewritten in place "
-                f"[{ATTACK_INJECTION}]"
-            )
+            fired(RULE_REWRITTEN, REWRITTEN_POINTS,
+                  "executable memory rewritten in place "
+                  f"[{ATTACK_INJECTION}]")
 
+    score = sum(r.points for r in reasons)
     return RegionVerdict(
         region.base_addr, region.size, min(score, 100), tuple(reasons)
     )

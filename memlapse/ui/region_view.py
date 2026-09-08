@@ -159,7 +159,8 @@ class RegionTableModel(QAbstractTableModel):
                 return QColor(red, green, blue, 110)  # translucent over dark theme
             if role == Qt.ToolTipRole:
                 # Band first: the number alone does not say what to do with it.
-                return f"{verdict.band}: " + "; ".join(verdict.reasons)
+                return (f"{verdict.band}: "
+                        + "; ".join(r.text for r in verdict.reasons))
         return None
 
     def set_regions(self, rows: list[Region],

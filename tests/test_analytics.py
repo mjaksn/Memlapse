@@ -3,9 +3,12 @@
 import pytest
 
 from memlapse.analytics import (
-    ENTROPY_PACKED, Mover, RegionVerdict, SeriesBuffer, is_executable,
-    leak_rate_bytes_per_sec, linreg_slope, longest_nop_run, score_region,
-    shannon_entropy, top_movers, zscore,
+    ENTROPY_PACKED, Mover, RULE_HIGH_ENTROPY, RULE_IMAGE_REWRITTEN,
+    RULE_MAPPED_EXEC, RULE_NOP_SLED, RULE_PE_HEADER, RULE_PRIVATE_EXEC,
+    RULE_REWRITTEN, RULE_RWX, RULE_THREAD_START, RULE_UNPACKED,
+    RegionVerdict, SeriesBuffer, is_executable, leak_rate_bytes_per_sec,
+    linreg_slope, longest_nop_run, score_region, shannon_entropy,
+    top_movers, zscore,
 )
 from memlapse.model.region import (
     MEM_COMMIT, MEM_IMAGE, MEM_MAPPED, MEM_PRIVATE, MEM_RESERVE, PAGE_EXECUTE_READ,
@@ -15,6 +18,11 @@ from memlapse.model.region import (
 
 def _region(protect, type_, state=MEM_COMMIT, base=0x1000, size=0x2000):
     return Region(base_addr=base, size=size, state=state, protect=protect, type=type_)
+
+
+def _rules(verdict):
+    """The rule ids that fired, which is what an allowlist entry names."""
+    return {r.rule for r in verdict.reasons}
 
 
 # --- SeriesBuffer ----------------------------------------------------------
@@ -157,13 +165,13 @@ def test_score_region_ignores_non_executable():
 def test_score_region_private_exec_is_core_signal():
     v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE))
     assert v.score == 50
-    assert "unbacked" in v.reasons[0]
+    assert _rules(v) == {RULE_PRIVATE_EXEC}
 
 
 def test_score_region_mapped_exec_scores_lower():
     v = score_region(_region(PAGE_EXECUTE_READ, MEM_MAPPED))
     assert v.score == 30
-    assert "stomping" in v.reasons[0]
+    assert _rules(v) == {RULE_MAPPED_EXEC}
 
 
 def test_score_region_image_exec_is_benign():
@@ -174,31 +182,31 @@ def test_score_region_image_exec_is_benign():
 def test_score_region_rwx_adds_points():
     v = score_region(_region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE))
     assert v.score == 75  # 50 private + 25 RWX
-    assert any("RWX" in r for r in v.reasons)
+    assert _rules(v) == {RULE_PRIVATE_EXEC, RULE_RWX}
 
 
 def test_score_region_mz_header_flagged():
     v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE), head=b"MZ" + b"\x00" * 10)
     assert v.score == 70  # 50 + 20 MZ
-    assert any("PE header" in r for r in v.reasons)
+    assert RULE_PE_HEADER in _rules(v)
 
 
 def test_score_region_nop_sled_flagged():
     v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE), head=b"\x90" * 16)
     assert v.score == 60  # 50 + 10 NOP
-    assert any("NOP" in r for r in v.reasons)
+    assert RULE_NOP_SLED in _rules(v)
 
 
 def test_score_region_high_entropy_flagged():
     v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE), head=bytes(range(256)))
     assert v.score == 60  # 50 + 10 entropy
-    assert any("entropy" in r for r in v.reasons)
+    assert RULE_HIGH_ENTROPY in _rules(v)
 
 
 def test_score_region_low_entropy_not_flagged():
     v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE), head=b"\x00" * 64)
     assert v.score == 50
-    assert not any("entropy" in r for r in v.reasons)
+    assert RULE_HIGH_ENTROPY not in _rules(v)
 
 
 def test_score_region_caps_at_100():
@@ -282,15 +290,16 @@ def test_rewritten_regions_checks_each_region_independently():
 def test_score_region_rewritten_private_adds_points():
     v = score_region(_snap(), rewritten=True)
     assert v.score == 50 + REWRITTEN_POINTS
-    assert any("rewritten in place" in r for r in v.reasons)
+    assert RULE_REWRITTEN in _rules(v)
 
 
 def test_score_region_rewritten_image_weighs_more():
     v = score_region(_snap(type=_IMAGE), rewritten=True)
     assert v.score == IMAGE_REWRITTEN_POINTS
-    assert v.reasons == (
+    assert _rules(v) == {RULE_IMAGE_REWRITTEN}
+    assert [r.text for r in v.reasons] == [
         "image code rewritten in memory (inline hook or module stomping) [T1055]",
-    )
+    ]
 
 
 def test_score_region_rewritten_ignored_for_non_executable():
@@ -304,16 +313,43 @@ def test_reasons_carry_their_attack_technique():
         ATTACK_INJECTION, ATTACK_PACKING, ATTACK_REFLECTIVE,
     )
     v = score_region(_snap(), head=b"MZ" + bytes(range(256)))
-    tagged = {r.rsplit("[", 1)[-1].rstrip("]") for r in v.reasons if r.endswith("]")}
+    tagged = {r.text.rsplit("[", 1)[-1].rstrip("]")
+              for r in v.reasons if r.text.endswith("]")}
     assert tagged == {ATTACK_INJECTION, ATTACK_REFLECTIVE, ATTACK_PACKING}
     mapped = score_region(_snap(type=MEM_MAPPED))
-    assert mapped.reasons[0].endswith(f"[{ATTACK_INJECTION}]")
+    assert mapped.reasons[0].text.endswith(f"[{ATTACK_INJECTION}]")
+
+
+# --- rule ids are schema -------------------------------------------------
+def test_rule_ids_are_unique_and_spelled_as_shipped():
+    """An allowlist entry names a rule id, and a recording will store one.
+
+    Renaming a shipped id silently changes what an existing entry means, so
+    the spellings are pinned here rather than left to the constants alone.
+    """
+    ids = [RULE_PRIVATE_EXEC, RULE_MAPPED_EXEC, RULE_RWX, RULE_THREAD_START,
+           RULE_PE_HEADER, RULE_NOP_SLED, RULE_HIGH_ENTROPY, RULE_UNPACKED,
+           RULE_REWRITTEN, RULE_IMAGE_REWRITTEN]
+    assert len(set(ids)) == len(ids)
+    assert ids == ["private-exec", "mapped-exec", "rwx", "thread-start",
+                   "pe-header", "nop-sled", "high-entropy", "unpacked",
+                   "rewritten", "image-rewritten"]
+
+
+def test_each_reason_carries_the_points_it_added():
+    """The score has to be derivable from the reasons, or suppressing one
+    later would need a second set of books to subtract from."""
+    v = score_region(_snap(protect=PAGE_EXECUTE_READWRITE),
+                     head=b"MZ" + b"\x00" * 32)
+    assert v.score == 95  # 50 private + 25 RWX + 20 MZ, none of them capped
+    assert sum(r.points for r in v.reasons) == v.score
+    assert all(r.points > 0 for r in v.reasons)
 
 
 def test_rwx_and_nop_sled_carry_no_technique():
     """Neither maps to an ATT&CK technique, so neither invents one."""
     reasons = score_region(_snap(protect=PAGE_EXECUTE_READWRITE), head=b"\x90" * 64).reasons
-    assert [r for r in reasons if not r.endswith("]")] == [
+    assert [r.text for r in reasons if not r.text.endswith("]")] == [
         "writable + executable (RWX)", "NOP sled",
     ]
 
@@ -373,7 +409,7 @@ def test_score_region_thread_start_in_unbacked_memory():
     v = score_region(_snap(), thread_start=True)
     assert v.score == 50 + THREAD_START_POINTS
     assert v.band == "likely injection"
-    assert any("a thread starts here" in r for r in v.reasons)
+    assert RULE_THREAD_START in _rules(v)
 
 
 def test_score_region_thread_start_in_an_image_is_normal():
@@ -428,4 +464,4 @@ def test_score_region_unpacked_stacks_with_rewritten():
     v = score_region(_snap(), head=_CODE, rewritten=True, unpacked=True)
     assert v.score == 50 + REWRITTEN_POINTS + UNPACKED_POINTS  # 85
     assert v.band == "likely injection"
-    assert any("unpacked in place" in r for r in v.reasons)
+    assert RULE_UNPACKED in _rules(v)
