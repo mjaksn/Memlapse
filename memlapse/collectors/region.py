@@ -92,8 +92,11 @@ class RegionSampler(QThread):
         with ProcessMemory(self.pid, want_read=True) as pm:
             regions = pm.regions()
             heads = self._read_heads(pm, regions)
-        # Off the GUI thread, like every other read here.
-        thread_starts = start_addresses(self.pid)
+            # Inside the handle, so one pinned instance supplies the whole
+            # sample: released here, the pid could be reused between the map
+            # and the thread walk and the two halves would describe different
+            # processes. Off the GUI thread, like every other read here.
+            thread_starts = start_addresses(self.pid)
         dao.add_sample(rec_id, ts, state, regions, heads, thread_starts)
         self.sampled.emit(ts, len(regions))
 

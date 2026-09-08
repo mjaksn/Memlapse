@@ -181,6 +181,25 @@ def test_stale_failed_result_is_ignored(qtbot, view, sample_regions, monkeypatch
     assert view.model.rowCount() == 2
 
 
+def test_the_thread_walk_happens_while_the_process_handle_is_open(qapp,
+                                                                  monkeypatch):
+    """The pid stays pinned across the walk, or the starts can come from the
+    process that inherited the number."""
+    order = []
+    pm_class = _fake_pm_class([])
+
+    class TrackingPM(pm_class):
+        def __exit__(self, *a):
+            order.append("handle closed")
+            return super().__exit__(*a)
+
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", TrackingPM)
+    monkeypatch.setattr(region_view_mod, "start_addresses",
+                        lambda pid: order.append("thread walk") or {})
+    region_view_mod._RegionLoadTask(1, 1234).run()
+    assert order == ["thread walk", "handle closed"]
+
+
 def test_region_load_task_reports_unexpected_error(qapp, monkeypatch):
     """The worker turns any unexpected error into a failed signal, not a crash."""
     class Boom:

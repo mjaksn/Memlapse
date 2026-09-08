@@ -78,9 +78,12 @@ class _RegionLoadTask(QRunnable):
                 # against it, since the pid alone can come to mean another
                 # process entirely.
                 created = pm.creation_time()
-            # Also off the GUI thread: one handle per thread, query only.
-            started = regions_with_thread_starts(
-                regions, start_addresses(self._pid).values())
+                # Inside the handle, which is what pins the pid: released
+                # here, a target that exited could have its number reused and
+                # the replacement's threads mapped onto this region list.
+                # Also off the GUI thread: one handle per thread, query only.
+                started = regions_with_thread_starts(
+                    regions, start_addresses(self._pid).values())
         except ProcessAccessError as exc:
             self.signals.failed.emit(self._req_id, str(exc))
         except Exception as exc:  # never let a pool thread die silently

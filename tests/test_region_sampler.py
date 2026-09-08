@@ -141,6 +141,28 @@ def test_read_heads_skips_regions_that_read_empty():
 
 
 # --- thread start addresses are recorded with the sample -------------------
+def test_the_thread_walk_happens_while_the_process_handle_is_open(qapp, tmp_db,
+                                                                  monkeypatch):
+    """One pinned instance has to supply the whole sample, or the map and the
+    thread starts can come from two different processes sharing a pid."""
+    open_handles = []
+    real_pm = region_mod.ProcessMemory
+
+    class TrackingPM(real_pm):
+        def close(self):
+            open_handles.append(False)
+            super().close()
+
+    monkeypatch.setattr(region_mod, "ProcessMemory", TrackingPM)
+    monkeypatch.setattr(region_mod, "start_addresses",
+                        lambda pid: open_handles.append(True) or {9: 0x7FF123})
+    s = RegionSampler(os.getpid(), "me", 0.01, db_path=tmp_db)
+    s.sampled.connect(lambda *_: s.stop())
+    s.run()
+    # True (thread walk) before False (handle closed), for the one sample taken.
+    assert open_handles[:2] == [True, False]
+
+
 def test_sample_records_thread_start_addresses(qapp, tmp_db, monkeypatch):
     monkeypatch.setattr(region_mod, "start_addresses", lambda pid: {9: 0x7FF123})
     s = RegionSampler(os.getpid(), "me", 0.01, db_path=tmp_db)
