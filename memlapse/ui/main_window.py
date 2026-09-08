@@ -158,7 +158,11 @@ class MainWindow(QMainWindow):
         dashboard, and its drops would otherwise be invisible.
         """
         self._dropped[which] = total
-        self._refresh_status()
+        # The collectors keep running during playback, where the status line
+        # belongs to the recording and the live count behind it is stale. The
+        # total is kept either way and shown again on the return to live.
+        if self._mode == "live":
+            self._refresh_status()
 
     def _refresh_status(self) -> None:
         note = "".join(
@@ -189,6 +193,7 @@ class MainWindow(QMainWindow):
         if self.playback is not None:
             self.playback.close()
             self.playback = None
+        self._refresh_status()   # the live counts, including any drops, return
         self.region_view.header.setText("Select a process to inspect its memory map.")
         self.region_view.model.set_regions([])
         self.statusBar().showMessage("Live mode", 3000)

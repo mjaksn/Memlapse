@@ -301,6 +301,19 @@ def test_status_bar_is_quiet_while_nothing_is_dropped(main_window, make_process)
     assert win._status_label.text() == "2 processes"
 
 
+def test_a_drop_during_playback_leaves_the_recording_status_alone(main_window,
+                                                                  make_process):
+    """The collectors keep running in playback, where the line is not theirs."""
+    win, _ = main_window
+    win.collector.updated.emit([make_process(pid=1)])
+    win._mode = "playback"
+    win._status_label.setText("WS 12.0 MB  |  7 threads")
+    win.collector.dropped.emit(5)
+    assert win._status_label.text() == "WS 12.0 MB  |  7 threads"
+    win._enter_live_mode()   # returning to live shows the total that was kept
+    assert "5 process polls dropped" in win._status_label.text()
+
+
 # --- a recorded thread start reaches the region view -----------------------
 def test_playback_seek_scores_a_recorded_thread_start(main_window):
     from PySide6.QtCore import Qt
