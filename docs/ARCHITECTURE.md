@@ -449,6 +449,17 @@ mode, which writes up to `REGION_DUMP_MAX` of the selected region so the
 payload can go to a disassembler or a YARA rule (RESEARCH_NOTES.md 4.1).
 It is a read, like everything else here.
 
+Both the save and the hex preview check that the pid still names the process
+the map came from, by comparing `ProcessMemory.creation_time()` against the
+value captured with the map. Windows reuses pids, and an analyst can take a
+while between selecting a process and asking for its bytes; without the check
+a target that exited in between could hand back bytes belonging to whatever
+inherited its number, filed under the old selection. The comparison happens
+with the handle already open, which is what keeps the pid from being recycled
+between the check and the read. The save writes through a temporary file in
+the destination directory and renames onto the target, so a failure part way
+through cannot truncate a file that was already there.
+
 **Surface**, `ui/region_view.py`. `RegionTableModel` gained a **Score**
 column. On `set_regions(rows, heads)` it computes a `RegionVerdict` per row and:
 
