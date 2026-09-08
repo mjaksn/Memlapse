@@ -445,6 +445,27 @@ def test_save_region_reports_the_cap(qtbot, view, sample_regions, monkeypatch,
     view.save_selected_region()
     assert len(target.read_bytes()) == 8
     assert "capped at 8B" in view.header.text()
+    assert "short read" not in view.header.text()   # the cap was met exactly
+
+
+def test_save_region_reports_the_cap_and_a_short_read_together(qtbot, view,
+                                                               sample_regions,
+                                                               monkeypatch,
+                                                               tmp_path):
+    """Our cap must not hide the target's short read: both, or neither is true."""
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=b"123"))
+    monkeypatch.setattr(region_view_mod, "REGION_DUMP_MAX", 8)
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)  # a 4096-byte region, capped to 8, only 3 readable
+    target = tmp_path / "region.bin"
+    _dialog(monkeypatch, str(target))
+    view.save_selected_region()
+    assert target.read_bytes() == b"123"
+    text = view.header.text()
+    assert "capped at 8B of 4.0K" in text
+    assert "short read of 8B" in text
 
 
 def test_save_region_without_a_selection(view, monkeypatch, tmp_path):

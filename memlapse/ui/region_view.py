@@ -400,14 +400,16 @@ class RegionView(QWidget):
             self.header.setText(f"save failed: {exc}")
             return
         # A short save has two different causes and the analyst needs to know
-        # which: the cap is our decision, a short read is the target's.
+        # which: the cap is our decision, a short read is the target's. They
+        # can happen to the same save, so each is reported on its own; folding
+        # them together would let our cap hide the target's short read.
+        notes = []
         if region.size > REGION_DUMP_MAX:
-            note = (f", capped at {_fmt_size(REGION_DUMP_MAX)} of "
-                    f"{_fmt_size(region.size)}")
-        elif len(data) < region.size:
-            note = f", short read of {_fmt_size(region.size)}"
-        else:
-            note = ""
+            notes.append(f"capped at {_fmt_size(REGION_DUMP_MAX)} of "
+                         f"{_fmt_size(region.size)}")
+        if len(data) < wanted:
+            notes.append(f"short read of {_fmt_size(wanted)}")
+        note = "".join(f", {n}" for n in notes)
         self.header.setText(
             f"saved {_fmt_size(len(data))} from 0x{region.base_addr:012x}{note}"
         )
