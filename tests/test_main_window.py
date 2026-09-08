@@ -278,10 +278,24 @@ def test_status_bar_reports_dropped_polls(main_window, make_process):
     win, _ = main_window
     win.collector.skipped = 3
     win.collector.updated.emit([make_process(pid=1)])
-    assert "3 polls dropped" in win._status_label.text()
+    assert "3 process polls dropped" in win._status_label.text()
     win.collector.skipped = 0
     win.collector.updated.emit([make_process(pid=1)])
     assert "dropped" not in win._status_label.text()
+
+
+def test_status_bar_names_the_stream_that_fell_behind(main_window, make_process):
+    """Both collectors drop independently; a silent one is indistinguishable
+    from one that is keeping up."""
+    win, _ = main_window
+    win.system_collector.skipped = 2
+    win.collector.updated.emit([make_process(pid=1)])
+    text = win._status_label.text()
+    assert "2 system polls dropped" in text
+    assert "process polls" not in text
+    win.collector.skipped = 4
+    win.collector.updated.emit([make_process(pid=1)])
+    assert "4 process polls dropped, 2 system polls dropped" in win._status_label.text()
 
 
 # --- a recorded thread start reaches the region view -----------------------

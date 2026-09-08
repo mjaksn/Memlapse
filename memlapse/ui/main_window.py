@@ -138,9 +138,17 @@ class MainWindow(QMainWindow):
         if self._mode == "live":
             self.process_view.update_processes(rows)
             # Latest-only delivery drops a poll when the GUI is still busy
-            # with the last one. Counting them is only honest if it shows.
-            dropped = self.collector.skipped
-            note = f", {dropped} polls dropped" if dropped else ""
+            # with the last one. Counting them is only honest if it shows, and
+            # both streams drop independently: the system poll feeds the
+            # dashboard, so its drops are invisible unless they are named.
+            drops = [
+                (self.collector.skipped, "process"),
+                (self.system_collector.skipped, "system"),
+            ]
+            note = "".join(
+                f", {count} {label} polls dropped"
+                for count, label in drops if count
+            )
             self._status_label.setText(f"{len(rows)} processes{note}")
 
     def _on_process_selected(self, pid: int, name: str) -> None:
