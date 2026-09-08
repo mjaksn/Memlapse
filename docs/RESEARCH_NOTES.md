@@ -513,12 +513,13 @@ long relative to the product's direct relevance.
 banded 0 to 29 benign, 30 to 69 suspicious, 70 to 100 malicious, and 30 is
 also the cutoff for forwarding an event to correlation: "Suspicious or
 malicious file events (scoring 30 or above) are sent to Network Detection and
-Response" [V, p. 458, p. 486]. Memlapse's review threshold of 50 hides a band
-the product considers worth a second look. A three-band display (with 30 as
-the floor of "review") costs nothing and matches the additive scale already in
-use. **Shipped:** `RegionVerdict.band` returns low, review or likely
-injection from `REVIEW_SCORE` (30) and `LIKELY_SCORE` (75), and the band
-leads the region tooltip.
+Response" [V, p. 458, p. 486]. Memlapse had no threshold at all in the code:
+every non-zero score was tinted alike, so nothing told an analyst which of
+them was worth a second look. A three-band display (with 30 as the floor of
+"review") costs nothing and matches the additive scale already in use.
+**Shipped:** `RegionVerdict.band` returns low, review or likely injection from
+`REVIEW_SCORE` (30) and `LIKELY_SCORE` (75), and the band leads the region
+tooltip.
 
 **Separate confidence from severity. New.** Impact "is initially Confidence *
 Severity / 100" [V, p. 513]; severity is a property of the threat type,
