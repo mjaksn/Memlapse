@@ -161,7 +161,7 @@ ENTROPY_CODE_MAX = 6.5
 #: minimum run of 0x90 bytes to count as a shellcode NOP sled.
 NOP_SLED_MIN = 16
 #: points for a region whose head fell from packed entropy to code-like
-#: entropy between two samples: a payload that decrypted itself in place.
+#: entropy between two looks: a payload that decrypted itself in place.
 UNPACKED_POINTS = 20
 
 #: points for a committed, executable region that is not image-backed and
@@ -271,7 +271,7 @@ def score_region(region: Region, *, head: bytes = b"",
     region (see :func:`regions_with_thread_starts`); it only scores when the
     region is not image-backed, since that is where threads normally start.
     ``unpacked`` says the head's entropy fell from packed to code-like
-    between samples (see :func:`unpacked_regions`). It stacks with
+    between the same two looks (see :func:`unpacked_regions`). It stacks with
     ``rewritten``, deliberately: the bytes changing is one fact and what they
     changed into is another, and a private region that did both reaches 85.
     Scores are additive and capped at 100. A non-executable or non-committed
