@@ -60,7 +60,7 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 308 passed with 100 percent line and branch
+(2026-09-06); the test run is 312 passed with 100 percent line and branch
 coverage (2026-09-08).
 
 ## Conventions
@@ -121,7 +121,9 @@ coverage (2026-09-08).
   confirm with `git ls-files --eol`.
 - A poller that emits faster than the GUI consumes will freeze the window. `collectors/
   base.py` drops a poll when the previous snapshot has not been dequeued and counts it in
-  `skipped`; keep that contract when adding a collector.
+  `skipped`; keep that contract when adding a collector. The same rule governs telling
+  the GUI about the drops: the total goes out on `dropped` alongside a delivered
+  snapshot, never once per drop, since a blocked consumer would queue every one of them.
 - Recordings are stored per user under `%LOCALAPPDATA%\Memlapse\memlapse.db`. Recordings
   made under the old name live in a `MemDo` folder beside it and are not picked up.
 - `git grep -P` handles Unicode escapes; plain `grep -P` on this machine does not, and
