@@ -101,11 +101,16 @@ def test_on_region_selected_invalid_clears_hex(qtbot, view, sample_regions, monk
 
 
 # --- fake ProcessMemory used to drive the live view ------------------------
-def _fake_pm_class(regions, readable=True, read_bytes=b"\x01\x02\x03\x04"):
+def _fake_pm_class(regions, readable=True, read_bytes=b"\x01\x02\x03\x04",
+                   created=1000):
     class FakePM:
+        instance_created = created   # a test can move this to fake pid reuse
+
         def __init__(self, pid, want_read=True):
             self.pid = pid
             self.can_read = readable
+        def creation_time(self):
+            return type(self).instance_created
         def __enter__(self):
             return self
         def __exit__(self, *a):
@@ -160,7 +165,7 @@ def test_stale_load_result_is_ignored(qtbot, view, sample_regions, monkeypatch):
     _wait_regions(qtbot, view, 2)
     # Simulate the first (now stale) load arriving after a newer selection.
     view.show_live_process(5678, "other.exe")  # bumps _load_seq
-    view._on_regions_loaded(stale_req, [], set(), True)
+    view._on_regions_loaded(stale_req, [], set(), 1000, True)
     assert "other.exe" in view.header.text()  # header reflects the newest request
 
 
@@ -357,6 +362,40 @@ def test_save_region_writes_the_bytes(qtbot, view, sample_regions, monkeypatch,
     view.save_selected_region()
     assert target.read_bytes() == whole
     assert view.header.text() == "saved 4.0K from 0x000000010000"
+
+
+# --- pid reuse: the bytes must come from the process that was selected ------
+def test_a_reused_pid_is_refused_for_a_save(qtbot, view, sample_regions,
+                                            monkeypatch, tmp_path):
+    """The target exited and something else now answers to its pid."""
+    pm_class = _fake_pm_class(sample_regions, read_bytes=b"B" * 4096)
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", pm_class)
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)
+    target = tmp_path / "region.bin"
+    _dialog(monkeypatch, str(target))
+
+    pm_class.instance_created = 9999    # a different process, same pid
+    view.save_selected_region()
+    assert "save refused" in view.header.text()
+    assert "belongs to another process" in view.header.text()
+    assert not target.exists()          # nothing of the replacement was kept
+
+
+def test_a_reused_pid_is_refused_for_the_hex_preview(qtbot, view, sample_regions,
+                                                     monkeypatch):
+    pm_class = _fake_pm_class(sample_regions, read_bytes=b"ABCD")
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", pm_class)
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)
+    assert "ABCD" in view.hex.toPlainText()
+
+    pm_class.instance_created = 9999
+    view.table.selectRow(1)   # move away and back, so the preview is re-read
+    view.table.selectRow(0)
+    assert "belongs to another process" in view.hex.toPlainText()
 
 
 def test_save_region_reports_a_short_read(qtbot, view, sample_regions,

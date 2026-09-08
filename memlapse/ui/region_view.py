@@ -46,8 +46,10 @@ REGION_DUMP_MAX = 16 * 1024 * 1024
 class _RegionLoadSignals(QObject):
     """Signals for :class:`_RegionLoadTask` (QRunnable can't carry its own)."""
 
-    #: req_id, regions (list[Region]), thread-start region bases, readable
-    loaded = Signal(int, object, object, bool)
+    #: req_id, regions (list[Region]), thread-start region bases, the target's
+    #: creation time (with the pid, which instance this map came from),
+    #: readable
+    loaded = Signal(int, object, object, "qlonglong", bool)
     #: req_id, error message
     failed = Signal(int, str)
 
@@ -72,6 +74,10 @@ class _RegionLoadTask(QRunnable):
             with ProcessMemory(self._pid) as pm:
                 regions = pm.regions()
                 readable = pm.can_read
+                # Which instance this map describes. Every later read compares
+                # against it, since the pid alone can come to mean another
+                # process entirely.
+                created = pm.creation_time()
             # Also off the GUI thread: one handle per thread, query only.
             started = regions_with_thread_starts(
                 regions, start_addresses(self._pid).values())
@@ -80,7 +86,8 @@ class _RegionLoadTask(QRunnable):
         except Exception as exc:  # never let a pool thread die silently
             self.signals.failed.emit(self._req_id, str(exc))
         else:
-            self.signals.loaded.emit(self._req_id, regions, started, readable)
+            self.signals.loaded.emit(self._req_id, regions, started, created,
+                                     readable)
 
 
 def _fmt_size(n: int) -> str:
@@ -174,6 +181,10 @@ class RegionView(QWidget):
         self._pid: int | None = None
         self._live = True  # live -> can read bytes; playback -> cannot
         self._readable = False
+        #: Creation time of the instance the current map came from. With the
+        #: pid it identifies one process, which is what every later read is
+        #: checked against.
+        self._created = 0
 
         # Live region maps are enumerated off the GUI thread. Each request gets
         # a monotonic id; only the newest one's result is applied, so rapidly
@@ -238,11 +249,13 @@ class RegionView(QWidget):
         self._pool.start(task)
 
     def _on_regions_loaded(self, req_id: int, regions: list[Region],
-                           thread_starts: set[int], readable: bool) -> None:
+                           thread_starts: set[int], created: int,
+                           readable: bool) -> None:
         if req_id != self._load_seq or self._pending is None:
             return  # a newer selection (or a mode switch) superseded this load
         pid, name = self._pending
         self._readable = readable
+        self._created = created
         self.model.set_regions(regions, thread_starts=thread_starts)
         note = "" if readable else "  (no read access, map only)"
         self.header.setText(f"{name} ({pid}): {len(regions)} regions{note}")
@@ -278,6 +291,21 @@ class RegionView(QWidget):
         if self.model.rowCount() == 0:
             self.hex.clear()
 
+    def _same_instance(self, pm: ProcessMemory) -> bool:
+        """Is the handle on the process the region map was read from?
+
+        Windows reuses pids. A target that exits between the map being read
+        and an analyst asking for bytes can be replaced by something unrelated
+        under the same number, and those bytes would then be filed under the
+        old selection. The handle is already open here, which is what pins the
+        pid, so comparing creation times closes the window rather than
+        narrowing it.
+        """
+        return pm.creation_time() == self._created
+
+    #: Shown when the pid no longer names the process the map came from.
+    _STALE = "process {pid} has exited; the pid now belongs to another process"
+
     def _on_region_selected(self, current: QModelIndex, _prev: QModelIndex) -> None:
         region = self.model.region_at(current.row()) if current.isValid() else None
         if region is None:
@@ -293,6 +321,9 @@ class RegionView(QWidget):
             return
         try:
             with ProcessMemory(self._pid) as pm:
+                if not self._same_instance(pm):
+                    self.hex.setPlainText(self._STALE.format(pid=self._pid))
+                    return
                 data = pm.read(region.base_addr, min(HEX_PREVIEW_BYTES, region.size))
         except ProcessAccessError as exc:
             self.hex.setPlainText(f"read failed: {exc}")
@@ -326,6 +357,14 @@ class RegionView(QWidget):
         wanted = min(region.size, REGION_DUMP_MAX)
         try:
             with ProcessMemory(self._pid) as pm:
+                if not self._same_instance(pm):
+                    # Refusing is the only honest answer: bytes from a
+                    # replacement process filed under this selection would be
+                    # evidence of nothing.
+                    self.header.setText(
+                        "save refused: " + self._STALE.format(pid=self._pid)
+                    )
+                    return
                 data = pm.read(region.base_addr, wanted)
         except ProcessAccessError as exc:
             self.header.setText(f"save failed: {exc}")
