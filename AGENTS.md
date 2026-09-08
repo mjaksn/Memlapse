@@ -60,7 +60,7 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 306 passed with 100 percent line and branch
+(2026-09-06); the test run is 308 passed with 100 percent line and branch
 coverage (2026-09-08).
 
 ## Conventions
@@ -100,8 +100,11 @@ coverage (2026-09-08).
   a genuinely unreachable line, a `# pragma: no cover` with a reason.
 - Widget tests use `pytest-qt`. `conftest.py` sets `QT_QPA_PLATFORM=offscreen` before
   PySide6 is imported, so the suite runs headless without any environment setup.
-- Win32 wrappers are tested against fakes; nothing in the suite needs elevation or a real
-  target process.
+- Win32 wrappers are tested against fakes, with one deliberate exception:
+  `test_win32_threads.py` asks for the start addresses of the test process's own
+  threads, because only a real call catches a wrong struct layout or a wrong
+  information class, and a fake would pass either way. Nothing in the suite needs
+  elevation, and nothing needs a target process other than itself.
 - CI (`.github/workflows/ci.yml`) runs the same install and `python -m pytest` on
   windows-latest with Python 3.14, on pull requests and pushes to main. Windows only,
   because `memlapse/win32` loads kernel32 and advapi32 at import time. The `gate` job
