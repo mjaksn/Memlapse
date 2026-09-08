@@ -352,6 +352,20 @@ def test_regions_with_thread_starts_ignores_addresses_in_no_region():
     from memlapse.analytics import regions_with_thread_starts
     assert regions_with_thread_starts([_snap()], [0xDEAD0000]) == set()
     assert regions_with_thread_starts([], [0x1000]) == set()
+    # Below every region, and in the gap between two of them.
+    regions = [_snap(base=0x1000, size=0x1000), _snap(base=0x9000, size=0x1000)]
+    assert regions_with_thread_starts(regions, [0x500]) == set()
+    assert regions_with_thread_starts(regions, [0x5000]) == set()
+
+
+def test_regions_with_thread_starts_does_not_assume_a_sorted_map():
+    """The lookup sorts, so a caller handing them over in any order is safe."""
+    from memlapse.analytics import regions_with_thread_starts
+    regions = [_snap(base=0x9000, size=0x1000), _snap(base=0x1000, size=0x1000),
+               _snap(base=0x5000, size=0x1000)]
+    assert regions_with_thread_starts(regions, [0x9500]) == {0x9000}
+    assert regions_with_thread_starts(regions, [0x1500]) == {0x1000}
+    assert regions_with_thread_starts(regions, [0x5500]) == {0x5000}
 
 
 def test_score_region_thread_start_in_unbacked_memory():
@@ -390,6 +404,17 @@ def test_unpacked_regions_needs_both_heads():
     assert unpacked_regions({}, {0x1000: _CODE}, {0x1000}) == set()
     assert unpacked_regions({0x1000: _PACKED}, {}, {0x1000}) == set()
     assert unpacked_regions({0x1000: _PACKED}, {0x1000: b""}, {0x1000}) == set()
+
+
+def test_unpacked_regions_does_not_read_a_short_read_as_unpacking():
+    """Fewer bytes readable is not the same as the bytes having changed."""
+    from memlapse.analytics import unpacked_regions
+    assert unpacked_regions({0x1000: _PACKED}, {0x1000: _PACKED[:1]},
+                            {0x1000}) == set()
+    assert unpacked_regions({0x1000: _PACKED}, {0x1000: _CODE[:16]},
+                            {0x1000}) == set()
+    # The same content at the same length still scores.
+    assert unpacked_regions({0x1000: _PACKED}, {0x1000: _CODE}, {0x1000}) == {0x1000}
 
 
 def test_unpacked_regions_only_looks_at_what_changed():

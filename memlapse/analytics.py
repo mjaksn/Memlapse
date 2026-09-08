@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from bisect import bisect_right
 from collections import Counter, deque
 from dataclasses import dataclass
 from typing import Sequence
@@ -388,13 +389,24 @@ def regions_with_thread_starts(regions: Sequence[Region],
     region is ignored: the map and the thread list are read a moment apart, so
     one can name memory the other has not got. Whether a hit means anything is
     :func:`score_region`'s decision, not this function's.
+
+    Each address is placed by binary search rather than by scanning the map,
+    which matters because playback calls this on the GUI thread for every
+    seek and a busy process has thousands of regions and hundreds of threads.
+    Regions never overlap, so the last one starting at or below an address is
+    the only candidate. The sort is what makes that safe for any caller and
+    costs almost nothing for the ordered maps both sources already produce.
     """
+    ordered = sorted(regions, key=lambda r: r.base_addr)
+    bases = [r.base_addr for r in ordered]
     hits: set[int] = set()
     for address in starts:
-        for region in regions:
-            if region.base_addr <= address < region.base_addr + region.size:
-                hits.add(region.base_addr)
-                break
+        index = bisect_right(bases, address) - 1
+        if index < 0:
+            continue  # below every region
+        region = ordered[index]
+        if address < region.base_addr + region.size:
+            hits.add(region.base_addr)
     return hits
 
 
@@ -413,11 +425,16 @@ def unpacked_regions(prev_heads: dict[int, bytes],
     byte to something a disassembler would recognise. The reverse, code turning
     into noise, is not this signal: that is a region being overwritten with a
     new packed payload, which :func:`rewritten_regions` already reports.
+
+    The two heads must be the same length to be compared at all. A head is
+    stored with however many bytes the read returned, so a full 256-byte
+    packed head followed by a short read would otherwise look like a collapse
+    in entropy when nothing changed but how much of the region could be read.
     """
     fell: set[int] = set()
     for base in changed:
         before, after = prev_heads.get(base), curr_heads.get(base)
-        if not before or not after:
+        if not before or not after or len(before) != len(after):
             continue
         if (shannon_entropy(before) >= ENTROPY_PACKED
                 and shannon_entropy(after) <= ENTROPY_CODE_MAX):
