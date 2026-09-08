@@ -1,11 +1,15 @@
 """Region map + hex inspector.
 
 Displays the VirtualQueryEx region list for a process and, on selection, a hex
-dump of the region's first bytes. Used in both live mode (reads memory on the
-fly via ProcessMemory) and playback mode (region map and any captured region
-heads from SQLite; the heads, and the set of regions whose head changed since
-the previous sample, feed the Score column, and the hex panel shows a fixed
-note, since only the first 256 bytes of executable regions are recorded).
+dump of the region's first bytes. Used in both live mode and playback mode.
+
+Live mode enumerates the map and reads the head of each executable region on
+a pool thread, then refreshes on a timer while the view is on screen; the
+heads feed the content signals and, from the second refresh on, the regions
+whose head changed while watching are flagged as rewritten. Playback mode
+shows the region map and the captured heads from SQLite, with the regions
+whose head changed since the previous sample, and the hex panel shows a fixed
+note, since only the first 256 bytes of executable regions are recorded.
 
 Both modes also mark the regions a thread starts in: live from a per-thread
 query on the pool thread, playback from what the recording stored.
@@ -19,7 +23,8 @@ from contextlib import suppress
 from pathlib import Path
 
 from PySide6.QtCore import (
-    QAbstractTableModel, QModelIndex, QObject, QRunnable, Qt, QThreadPool, Signal,
+    QAbstractTableModel, QModelIndex, QObject, QRunnable, Qt, QThreadPool, QTimer,
+    Signal,
 )
 from PySide6.QtGui import QAction, QColor, QFont
 from PySide6.QtWidgets import (
@@ -27,7 +32,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..analytics import RegionVerdict, regions_with_thread_starts, score_region
+from ..analytics import (
+    RegionVerdict, head_hash, regions_with_thread_starts, rewritten_regions,
+    score_region,
+)
+from ..collectors.region import read_heads
 from ..model.region import Region
 from ..win32.memory import ProcessAccessError, ProcessMemory
 from ..win32.threads import start_addresses
@@ -42,14 +51,19 @@ HEX_PREVIEW_BYTES = 512
 #: rule, not to mirror an address space. A truncated save says so.
 REGION_DUMP_MAX = 16 * 1024 * 1024
 
+#: How often the live map is re-enumerated while the view is on screen. Matches
+#: the recorder's default one second cadence, so what the live detector shows
+#: is what a recording of the same process would replay.
+LIVE_REFRESH_MS = 1000
+
 
 class _RegionLoadSignals(QObject):
     """Signals for :class:`_RegionLoadTask` (QRunnable can't carry its own)."""
 
-    #: req_id, regions (list[Region]), thread-start region bases, the target's
-    #: creation time (with the pid, which instance this map came from),
-    #: readable
-    loaded = Signal(int, object, object, "qlonglong", bool)
+    #: req_id, regions (list[Region]), heads (dict[int, bytes]),
+    #: thread-start region bases, the target's creation time (with the pid,
+    #: which instance this map came from), readable
+    loaded = Signal(int, object, object, object, "qlonglong", bool)
     #: req_id, error message
     failed = Signal(int, str)
 
@@ -60,7 +74,8 @@ class _RegionLoadTask(QRunnable):
     VirtualQueryEx walks the whole address space, which for a busy process is
     tens of thousands of syscalls, long enough to freeze the window if done on
     the GUI thread. Running it in the thread pool keeps the UI responsive; the
-    result is handed back over a queued signal.
+    result, with the head bytes of each executable region for the content and
+    change signals, is handed back over a queued signal.
     """
 
     def __init__(self, req_id: int, pid: int) -> None:
@@ -73,6 +88,7 @@ class _RegionLoadTask(QRunnable):
         try:
             with ProcessMemory(self._pid) as pm:
                 regions = pm.regions()
+                heads = read_heads(pm, regions)
                 readable = pm.can_read
                 # Which instance this map describes. Every later read compares
                 # against it, since the pid alone can come to mean another
@@ -89,8 +105,8 @@ class _RegionLoadTask(QRunnable):
         except Exception as exc:  # never let a pool thread die silently
             self.signals.failed.emit(self._req_id, str(exc))
         else:
-            self.signals.loaded.emit(self._req_id, regions, started, created,
-                                     readable)
+            self.signals.loaded.emit(self._req_id, regions, heads, started,
+                                     created, readable)
 
 
 def _fmt_size(n: int) -> str:
@@ -152,12 +168,14 @@ class RegionTableModel(QAbstractTableModel):
                     unpacked: set[int] | None = None) -> None:
         """Replace the rows and score each one.
 
-        ``heads`` carries captured bytes by base address and ``rewritten`` the
-        base addresses whose head changed since the previous sample; both are
-        empty in live mode, where only the structural signals apply.
+        ``heads`` carries the head bytes by base address (read live, or
+        captured in the recording) and ``rewritten`` the base addresses whose
+        head changed: since the previous sample in playback, while watching in
+        live mode. Without heads only the structural signals apply.
         ``thread_starts`` carries the base addresses a thread starts in, which
         both modes can know, and ``unpacked`` those whose entropy fell to
-        code-like values, which needs two samples and so is playback only.
+        code-like values, which needs two sets of head bytes and so is
+        playback only.
         """
         heads = heads or {}
         rewritten = rewritten or set()
@@ -196,6 +214,18 @@ class RegionView(QWidget):
         self._pool = QThreadPool.globalInstance()
         self._load_seq = 0
         self._pending: tuple[int, str] | None = None
+        self._in_flight = False
+
+        # Live mode re-enumerates on a timer. The previous refresh's regions
+        # and head hashes feed the content-change detector, and a region seen
+        # rewritten stays flagged while it is still there, since a change that
+        # showed for one tick and vanished would be a detector nobody sees.
+        self._refresh = QTimer(self)
+        self._refresh.setInterval(LIVE_REFRESH_MS)
+        self._refresh.timeout.connect(self._on_refresh_tick)
+        self._prev_regions: list[Region] = []
+        self._prev_hashes: dict[int, bytes] = {}
+        self._live_rewritten: set[int] = set()
 
         self.header = QLabel("Select a process to inspect its memory map.", self)
         self.header.setWordWrap(True)
@@ -241,31 +271,88 @@ class RegionView(QWidget):
         self._live = True
         self.hex.clear()
         # Clear the previous map at once and enumerate the new one in the
-        # background so the GUI thread never blocks on VirtualQueryEx.
+        # background so the GUI thread never blocks on VirtualQueryEx. A new
+        # selection starts the change history afresh, even for the same pid.
         self.model.set_regions([])
-        self._load_seq += 1
+        self._prev_regions = []
+        self._prev_hashes = {}
+        self._live_rewritten = set()
         self._pending = (pid, name)
         self.header.setText(f"{name} ({pid}): reading memory map…")
+        self._start_load(pid)
+        self._refresh.start()
+
+    def _start_load(self, pid: int) -> None:
+        self._load_seq += 1
+        self._in_flight = True
         task = _RegionLoadTask(self._load_seq, pid)
         task.signals.loaded.connect(self._on_regions_loaded)
         task.signals.failed.connect(self._on_regions_failed)
         self._pool.start(task)
 
+    def _on_refresh_tick(self) -> None:
+        """Re-enumerate the watched process, latest-only and only when seen.
+
+        A tick is skipped while the previous load is still running (the same
+        no-backlog rule the collectors follow) and while the view is hidden,
+        so the Dashboard tab does not pay for a VirtualQueryEx walk a second.
+        """
+        if not self._live or self._pid is None:
+            self._refresh.stop()
+            return
+        if self._in_flight or not self.isVisible():
+            return
+        self._start_load(self._pid)
+
     def _on_regions_loaded(self, req_id: int, regions: list[Region],
-                           thread_starts: set[int], created: int,
-                           readable: bool) -> None:
+                           heads: dict[int, bytes], thread_starts: set[int],
+                           created: int, readable: bool) -> None:
         if req_id != self._load_seq or self._pending is None:
             return  # a newer selection (or a mode switch) superseded this load
+        self._in_flight = False
         pid, name = self._pending
         self._readable = readable
         self._created = created
-        self.model.set_regions(regions, thread_starts=thread_starts)
+        hashes = {base: head_hash(data) for base, data in heads.items()}
+        changed = rewritten_regions(self._prev_regions, self._prev_hashes,
+                                    regions, hashes)
+        present = {r.base_addr for r in regions}
+        self._live_rewritten = (self._live_rewritten & present) | changed
+        self._prev_regions, self._prev_hashes = regions, hashes
+        self._replace_rows(regions, heads, self._live_rewritten, thread_starts)
         note = "" if readable else "  (no read access, map only)"
-        self.header.setText(f"{name} ({pid}): {len(regions)} regions{note}")
+        flagged = len(self._live_rewritten)
+        change = f", {flagged} rewritten while watching" if flagged else ""
+        self.header.setText(
+            f"{name} ({pid}): {len(regions)} regions{change}{note}"
+        )
+
+    def _replace_rows(self, regions: list[Region], heads: dict[int, bytes],
+                      rewritten: set[int], thread_starts: set[int]) -> None:
+        """Reset the model without losing the analyst's place.
+
+        A model reset drops the current row silently, which would blank the
+        hex panel and scroll to the top on every refresh. Reselecting the same
+        base address re-reads its preview (the refresh the analyst wants) and
+        the scroll position is restored last, since selecting a row scrolls.
+        """
+        current = self.model.region_at(self.table.currentIndex().row())
+        scroll = self.table.verticalScrollBar().value()
+        self.model.set_regions(regions, heads, rewritten, thread_starts)
+        if current is not None:
+            for row, r in enumerate(regions):
+                if r.base_addr == current.base_addr:
+                    self.table.selectRow(row)
+                    break
+            else:
+                self.hex.clear()
+        self.table.verticalScrollBar().setValue(scroll)
 
     def _on_regions_failed(self, req_id: int, message: str) -> None:
         if req_id != self._load_seq or self._pending is None:
             return
+        self._in_flight = False
+        self._refresh.stop()  # the target is gone or closed to us
         pid, name = self._pending
         self.model.set_regions([])
         self.header.setText(f"{name} ({pid}), cannot open: {message}")
@@ -279,9 +366,11 @@ class RegionView(QWidget):
         self._pid = None
         self._live = False
         # Invalidate any in-flight live enumeration so it can't overwrite the
-        # recorded map when it finishes.
+        # recorded map when it finishes, and stop refreshing.
+        self._refresh.stop()
         self._load_seq += 1
         self._pending = None
+        self._in_flight = False
         self.model.set_regions(regions, heads, rewritten, thread_starts,
                                unpacked)
         self.header.setText(header)

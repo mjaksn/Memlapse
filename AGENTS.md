@@ -25,8 +25,9 @@ installable package, a service, or a blocking security product.
   dataclasses, the SQLite schema and DAO, recording and playback, and the pure scoring
   and statistics functions. No Win32 calls here.
 - `memlapse/ui/`: the Qt widgets. Reads `win32/` only for privilege state, the
-  live region-map enumeration (run on a `QThreadPool` thread), hex reads and the
-  bounded region save.
+  live region-map enumeration with its region head reads (run on a `QThreadPool`
+  thread, once a second while the view is on screen), hex reads and the bounded
+  region save.
 - `docs/ARCHITECTURE.md` explains the design and the heuristics; `docs/RESEARCH_NOTES.md`
   holds the reference reading and the ideas queued for later phases.
 
@@ -60,7 +61,7 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 320 passed with 100 percent line and branch
+(2026-09-06); the test run is 329 passed with 100 percent line and branch
 coverage (2026-09-08).
 
 ## Conventions
@@ -68,9 +69,10 @@ coverage (2026-09-08).
 - Layering is strict in one direction: `ui` never calls Win32 except through the four
   uses above (the privilege calls, the bounded 512-byte hex preview read and the
   region save, capped at `REGION_DUMP_MAX` and measured at about 10 ms for the full
-  16 MB, run on the GUI thread; live region enumeration and the thread start
-  addresses that go with it run on a `QThreadPool` thread), polling and
-  recording live in `collectors` on their own `QThread`s and write storage there,
+  16 MB, run on the GUI thread; live region enumeration, its region head reads and
+  the thread start addresses that go with it run on a `QThreadPool` thread, once a
+  second while the view is on screen), polling and recording live in `collectors` on
+  their own `QThread`s and write storage there,
   playback reads storage on the GUI thread through `PlaybackEngine`, and `model`,
   `storage`, `services` and `analytics` import no Qt widgets and no Win32 (QtCore
   signals are allowed in `services` and `collectors`). Cross-thread hand-off is by Qt

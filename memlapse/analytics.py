@@ -264,8 +264,9 @@ def score_region(region: Region, *, head: bytes = b"",
 
     ``head`` is the first bytes of the region (from ReadProcessMemory) when
     available; pass ``b""`` to run structural checks only. ``rewritten`` says
-    the head changed since the previous sample with the region otherwise
-    unchanged, which only a recording can know (see :func:`rewritten_regions`).
+    the head changed between two looks at the region, a previous sample in
+    playback or a previous refresh while watching live, with the region
+    otherwise unchanged (see :func:`rewritten_regions`).
     ``thread_start`` says a thread's Win32 start address falls inside this
     region (see :func:`regions_with_thread_starts`); it only scores when the
     region is not image-backed, since that is where threads normally start.
@@ -341,7 +342,7 @@ def score_region(region: Region, *, head: bytes = b"",
         else:
             score += REWRITTEN_POINTS
             reasons.append(
-                "executable memory rewritten since previous sample "
+                "executable memory rewritten in place "
                 f"[{ATTACK_INJECTION}]"
             )
 
@@ -354,10 +355,13 @@ def rewritten_regions(prev_regions: Sequence[Region],
                       prev_hashes: dict[int, bytes],
                       curr_regions: Sequence[Region],
                       curr_hashes: dict[int, bytes]) -> set[int]:
-    """Base addresses of executable regions rewritten between two samples.
+    """Base addresses of executable regions rewritten between two looks.
 
-    A region counts when it is committed and executable in both samples with
-    the same base, size and protection, both samples captured its head, and
+    The two looks are consecutive samples in playback and consecutive live
+    refreshes while watching; the comparison is the same either way.
+
+    A region counts when it is committed and executable in both looks with
+    the same base, size and protection, both looks captured its head, and
     the two hashes differ. Anything else is not this detector's business: a
     region that appeared, grew, or changed protection belongs to the
     allocation and transition signals, and a head missing on either side

@@ -180,11 +180,13 @@ the score rather than raise an alert on its own.
 
 **Status.** Implemented: heads are stored once per distinct content under
 their SHA-256 hash, and playback compares consecutive samples with
-`analytics.rewritten_regions`, adding 15 points to a rewritten private or
-mapped region and 40 to a rewritten image region, where the benign
-explanation is rarer but includes an EDR's own hooks, which is why 40 lands
-in the review band rather than the likely-injection one. See the scoring
-table in ARCHITECTURE.md.
+`analytics.rewritten_regions`, as does the live view between one refresh and
+the next, adding 15 points to a rewritten private or mapped region and 40 to
+a rewritten image region, where the benign explanation is rarer but includes
+an EDR's own hooks, which is why 40 lands in the review band rather than the
+likely-injection one. A region seen rewritten live stays flagged until it
+leaves the map, since a live monitor has no scrub-back. See the scoring table
+in ARCHITECTURE.md.
 
 ### 2.2 Watch protection changes. Corroborates
 
@@ -217,8 +219,8 @@ already deduplicated by content, so entropy is computed from the two heads
 at read time, and only for the regions the rewrite detector already flagged,
 which is the only set where the content can have moved at all. It stacks
 with the rewrite, so a private region that decrypted itself scores 85. This
-is playback only: head bytes are captured by the recorder alone, so the live
-view has no earlier content to compare and the rule stays silent there.
+is playback only: the live view keeps only the hash of the previous refresh's
+heads, so it has no earlier bytes to measure and the rule stays silent there.
 
 ### 2.4 Catch short-lived processes and record lineage at creation. Part shipped
 

@@ -28,6 +28,25 @@ from ..win32.threads import start_addresses
 HEAD_BYTES = 256
 
 
+def read_heads(pm: ProcessMemory, regions) -> dict[int, bytes]:
+    """Read the head of each executable, readable region for content scans.
+
+    Shared by the recorder and the live region view, so what the live
+    detector sees is what a recording of the same process would replay.
+    Empty when the handle lacks read access (unelevated target); regions that
+    are not executable, unreadable, or return no bytes are skipped.
+    """
+    heads: dict[int, bytes] = {}
+    if not pm.can_read:
+        return heads
+    for r in regions:
+        if is_executable(r.protect) and r.is_readable:
+            data = pm.read(r.base_addr, HEAD_BYTES)
+            if data:
+                heads[r.base_addr] = data
+    return heads
+
+
 def _now_us() -> int:
     return time.time_ns() // 1000
 
@@ -91,7 +110,7 @@ class RegionSampler(QThread):
         )
         with ProcessMemory(self.pid, want_read=True) as pm:
             regions = pm.regions()
-            heads = self._read_heads(pm, regions)
+            heads = read_heads(pm, regions)
             # Inside the handle, so one pinned instance supplies the whole
             # sample: released here, the pid could be reused between the map
             # and the thread walk and the two halves would describe different
@@ -99,23 +118,6 @@ class RegionSampler(QThread):
             thread_starts = start_addresses(self.pid)
         dao.add_sample(rec_id, ts, state, regions, heads, thread_starts)
         self.sampled.emit(ts, len(regions))
-
-    @staticmethod
-    def _read_heads(pm: ProcessMemory, regions) -> dict[int, bytes]:
-        """Read the head of each executable, readable region for content scans.
-
-        Empty when the handle lacks read access (unelevated target); regions
-        that are not executable, unreadable, or return no bytes are skipped.
-        """
-        heads: dict[int, bytes] = {}
-        if not pm.can_read:
-            return heads
-        for r in regions:
-            if is_executable(r.protect) and r.is_readable:
-                data = pm.read(r.base_addr, HEAD_BYTES)
-                if data:
-                    heads[r.base_addr] = data
-        return heads
 
     def _sleep_remaining(self, start: float) -> None:
         remaining = max(0.0, self.interval - (time.monotonic() - start))

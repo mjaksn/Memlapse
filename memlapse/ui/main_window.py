@@ -3,7 +3,8 @@
 Two modes:
 
 * **Live**, the ProcessCollector streams the process list; selecting a process
-  shows its live memory map (region view reads bytes on demand).
+  shows its live memory map, refreshed every second while on screen and scored
+  with the content signals and the regions rewritten while watching.
 * **Playback**, a recording is opened; the timeline scrubber drives the region
   view from stored samples (no live reads), including the regions rewritten
   since the previous sample and the regions a thread started in.
