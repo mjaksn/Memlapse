@@ -554,3 +554,27 @@ def test_allowlist_accepts_entries_that_can_only_be_read_once():
     assert book.rules_for("jit.exe") == {RULE_PRIVATE_EXEC, RULE_RWX}
     assert len(book.entries) == 2
 
+
+def test_every_rule_scores_something_so_excusing_them_all_reaches_zero():
+    """`band` calls a region allowlisted when no points are left, which
+
+    means the same as "every rule was excused" only while no rule can fire
+    for nothing. A new rule worth zero points would quietly break that, so
+    the whole vocabulary is exercised here rather than one case of it.
+    """
+    head = b"MZ" + b"\x90" * 32 + bytes(range(256))
+    fired = {}
+    for verdict in (
+        score_region(_region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE), head=head,
+                     thread_start=True, rewritten=True, unpacked=True),
+        score_region(_region(PAGE_EXECUTE_READ, MEM_MAPPED)),
+        score_region(_region(PAGE_EXECUTE_READ, MEM_IMAGE), rewritten=True),
+    ):
+        for r in verdict.reasons:
+            fired[r.rule] = r.points
+    assert set(fired) == {RULE_PRIVATE_EXEC, RULE_MAPPED_EXEC, RULE_RWX,
+                          RULE_THREAD_START, RULE_PE_HEADER, RULE_NOP_SLED,
+                          RULE_HIGH_ENTROPY, RULE_UNPACKED, RULE_REWRITTEN,
+                          RULE_IMAGE_REWRITTEN}
+    assert all(points > 0 for points in fired.values())
+

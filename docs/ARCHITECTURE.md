@@ -402,9 +402,9 @@ flowchart TD
     R -- no --> CAP["score = min(sum, 100)"]
     RI --> CAP
     RW --> CAP
-    CAP --> AL{"every fired rule<br/>allowlisted for this image?"}
-    AL -- yes --> ALW["band = allowlisted<br/>(score kept, tint neutral)"]
-    AL -- no --> EFF["band from effective score<br/>(excused rules subtracted)"]
+    CAP --> AL{"points left after excusing<br/>this image's allowlisted rules?"}
+    AL -- none --> ALW["band = allowlisted<br/>(score kept, tint neutral)"]
+    AL -- some --> EFF["band from those points<br/>(the excused ones subtracted)"]
 ```
 
 ### End-to-end data flow
@@ -624,9 +624,11 @@ commercial platform uses ([RESEARCH_NOTES.md](RESEARCH_NOTES.md) 7.1 and 7.3):
   appears in the reasons, marked "(allowlisted)" in the tooltip.
   `RegionVerdict.score` is untouched and the table still shows it. What changes
   is `effective_score`, the sum of the rules that were not excused, and the
-  band comes from that. A region whose every rule was excused bands as
-  `allowlisted` and is tinted neutral grey instead of by heat. Filtering it out
-  would hide the one thing an analyst reviewing a false positive needs to see.
+  band comes from that, as does the heat tint. A region left with no points
+  at all bands as `allowlisted` and is tinted neutral grey instead of by
+  heat; since every rule scores something, that is the same as every rule
+  that fired having been excused. Filtering the row out would hide the one
+  thing an analyst reviewing a false positive needs to see.
 - **Scope it to one heuristic.** An entry names exactly one rule. Exempting a
   JIT host from `private-exec` and `rwx` leaves `pe-header`, `nop-sled` and the
   rest counting, so a stomped CLR still reaches the review band on its content.

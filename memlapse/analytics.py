@@ -345,9 +345,10 @@ class RegionVerdict:
         The empty string is for a region that scored nothing at all, which
         is most of them. "low" is a region that tripped something without
         reaching :data:`REVIEW_SCORE`: still shown, still tinted, but not
-        asking for the analyst's time. "allowlisted" is a region that scored
-        only on rules an entry exempted for this process: the row and the
-        number stay, the verdict does not.
+        asking for the analyst's time. "allowlisted" is a region with no
+        points left once the excused rules are subtracted: the row and the
+        number stay, the verdict does not. Since every rule scores something,
+        that is the same as every rule that fired having been excused.
         """
         if self.score <= 0:
             return ""
