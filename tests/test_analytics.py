@@ -3,10 +3,12 @@
 import pytest
 
 from memlapse.analytics import (
-    ENTROPY_PACKED, Mover, RULE_HIGH_ENTROPY, RULE_IMAGE_REWRITTEN,
+    ENTROPY_PACKED, Allowlist, AllowlistEntry, Mover, RULE_HIGH_ENTROPY,
+    RULE_IMAGE_REWRITTEN,
     RULE_MAPPED_EXEC, RULE_NOP_SLED, RULE_PE_HEADER, RULE_PRIVATE_EXEC,
     RULE_REWRITTEN, RULE_RWX, RULE_THREAD_START, RULE_UNPACKED,
-    RegionVerdict, SeriesBuffer, is_executable, leak_rate_bytes_per_sec,
+    Reason, RegionVerdict, SeriesBuffer, is_executable,
+    leak_rate_bytes_per_sec,
     linreg_slope, longest_nop_run, score_region, shannon_entropy,
     top_movers, zscore,
 )
@@ -146,9 +148,19 @@ def test_longest_nop_run_empty():
 
 
 # --- RegionVerdict ---------------------------------------------------------
+def _verdict(score):
+    """A verdict whose single reason accounts for the whole score.
+
+    The score is the sum of its reasons' points, which is what lets an
+    allowlisted rule be subtracted, so a verdict built by hand has to
+    honour that too.
+    """
+    return RegionVerdict(0, 0, score, (Reason("x", "x", score),))
+
+
 def test_region_verdict_suspicious_flag():
     assert RegionVerdict(0, 0, 0, ()).suspicious is False
-    assert RegionVerdict(0, 0, 10, ("x",)).suspicious is True
+    assert _verdict(10).suspicious is True
 
 
 # --- score_region ----------------------------------------------------------
@@ -357,7 +369,7 @@ def test_rwx_and_nop_sled_carry_no_technique():
 # --- triage bands ----------------------------------------------------------
 def test_verdict_band_edges():
     from memlapse.analytics import LIKELY_SCORE, REVIEW_SCORE
-    band = lambda score: RegionVerdict(0, 0, score, ()).band
+    band = lambda score: _verdict(score).band
     assert band(0) == ""
     assert band(1) == "low"
     assert band(REVIEW_SCORE - 1) == "low"
@@ -465,3 +477,80 @@ def test_score_region_unpacked_stacks_with_rewritten():
     assert v.score == 50 + REWRITTEN_POINTS + UNPACKED_POINTS  # 85
     assert v.band == "likely injection"
     assert RULE_UNPACKED in _rules(v)
+
+
+# --- the allowlist: suppress a verdict, never a row ------------------------
+def test_allowlist_is_keyed_on_the_image_name_case_insensitively():
+    book = Allowlist([AllowlistEntry("claude.exe", RULE_PRIVATE_EXEC, "V8 JIT"),
+                      AllowlistEntry("claude.exe", RULE_RWX, "V8 JIT")])
+    assert book.rules_for("CLAUDE.exe") == {RULE_PRIVATE_EXEC, RULE_RWX}
+    assert book.rules_for("notepad.exe") == frozenset()
+    assert bool(book) and not bool(Allowlist())
+
+
+def test_an_unallowlisted_region_scores_exactly_as_before():
+    region = _region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
+    v = score_region(region)
+    assert v.score == 75 and v.effective_score == 75
+    assert v.band == "likely injection"
+    assert not any(r.allowed for r in v.reasons)
+
+
+def test_allowlisting_every_fired_rule_keeps_the_row_and_the_score():
+    """The JIT case: the number stays, the verdict does not."""
+    region = _region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
+    v = score_region(region, allowed={RULE_PRIVATE_EXEC, RULE_RWX})
+    assert v.score == 75          # raw, so the analyst sees what fired
+    assert v.effective_score == 0
+    assert v.band == "allowlisted"
+    assert [r.rule for r in v.reasons] == [RULE_PRIVATE_EXEC, RULE_RWX]
+    assert all(r.allowed for r in v.reasons)
+
+
+def test_allowlisting_one_rule_leaves_the_others_counting():
+    """An entry is scoped to a heuristic, not to a process wholesale."""
+    region = _region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
+    v = score_region(region, allowed={RULE_PRIVATE_EXEC})
+    assert v.score == 75 and v.effective_score == 25   # RWX still counts
+    assert v.band == "low"
+    assert [r.allowed for r in v.reasons] == [True, False]
+
+
+def test_a_stomped_jit_host_still_scores_on_its_content():
+    """The case the scoping exists for: exempting the executable-private
+    rule must not exempt the PE header that says something was loaded."""
+    region = _region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
+    v = score_region(region, head=b"MZ" + bytes(range(256)),
+                     allowed={RULE_PRIVATE_EXEC, RULE_RWX})
+    assert v.band == "review"                    # 20 MZ + 10 entropy
+    assert v.effective_score == 30
+    assert {r.rule for r in v.reasons if not r.allowed} == {
+        RULE_PE_HEADER, RULE_HIGH_ENTROPY}
+
+
+def test_removing_an_entry_restores_the_verdict():
+    """Nothing is recomputed or discarded, so the finding just comes back."""
+    region = _region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
+    book = Allowlist([AllowlistEntry("jit.exe", RULE_PRIVATE_EXEC),
+                      AllowlistEntry("jit.exe", RULE_RWX)])
+    muted = score_region(region, allowed=book.rules_for("jit.exe"))
+    restored = score_region(region, allowed=Allowlist().rules_for("jit.exe"))
+    assert muted.band == "allowlisted" and restored.band == "likely injection"
+    assert muted.score == restored.score
+    assert [r.text for r in muted.reasons] == [r.text for r in restored.reasons]
+
+
+def test_a_benign_region_is_not_called_allowlisted():
+    """Nothing fired, so there is no verdict to suppress."""
+    v = score_region(_region(PAGE_EXECUTE_READ, MEM_IMAGE),
+                     allowed={RULE_PRIVATE_EXEC, RULE_RWX})
+    assert v.score == 0 and v.band == "" and v.effective_score == 0
+
+
+def test_allowlist_accepts_entries_that_can_only_be_read_once():
+    """Storage will hand it a cursor, which indexing would consume."""
+    book = Allowlist(AllowlistEntry("jit.exe", rule)
+                     for rule in (RULE_PRIVATE_EXEC, RULE_RWX))
+    assert book.rules_for("jit.exe") == {RULE_PRIVATE_EXEC, RULE_RWX}
+    assert len(book.entries) == 2
+

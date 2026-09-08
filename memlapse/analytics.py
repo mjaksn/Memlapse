@@ -13,7 +13,7 @@ import math
 from bisect import bisect_right
 from collections import Counter, deque
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Collection, Sequence
 
 from .model.region import (
     MEM_COMMIT,
@@ -218,6 +218,54 @@ class Reason:
     rule: str
     text: str
     points: int
+    #: an allowlist entry named this rule for this process, so it still
+    #: fired and still shows, but it does not count towards the band
+    allowed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class AllowlistEntry:
+    """One exemption: a process, the single rule it excuses, and why.
+
+    ``note`` is the analyst's reason for the entry. It is not decoration:
+    an exemption nobody can justify later is one nobody dares delete.
+    """
+
+    image_name: str
+    rule: str
+    note: str = ""
+
+
+class Allowlist:
+    """Which rules are exempted for which processes.
+
+    Keyed on the process image name, which the bulk process query already
+    returns for every process without needing a handle and which a recording
+    already stores, so a replay on another machine reads the same key. The
+    name is matched case-insensitively, since Windows treats it that way.
+
+    An image path plus its publisher would be a stronger key: a name alone
+    excuses anything that adopts it, which is a real evasion and the reason
+    this is a triage aid rather than a control. That upgrade is the intended
+    next step. A pid is never a key, since Windows reuses those in minutes.
+    """
+
+    def __init__(self, entries: Collection[AllowlistEntry] = ()) -> None:
+        # Materialise first: entries may arrive as a cursor or a generator,
+        # and indexing it below would consume it.
+        self.entries = tuple(entries)
+        self._by_image: dict[str, frozenset[str]] = {}
+        for entry in self.entries:
+            key = entry.image_name.casefold()
+            self._by_image[key] = self._by_image.get(
+                key, frozenset()) | {entry.rule}
+
+    def rules_for(self, image_name: str) -> frozenset[str]:
+        """The rule ids exempted for this process, empty when none are."""
+        return self._by_image.get(image_name.casefold(), frozenset())
+
+    def __bool__(self) -> bool:
+        return bool(self._by_image)
 
 
 def is_executable(protect: int) -> bool:
@@ -258,7 +306,12 @@ def longest_nop_run(data: bytes) -> int:
 
 @dataclass(frozen=True, slots=True)
 class RegionVerdict:
-    """Suspicion score (0..100) and human-readable reasons for one region."""
+    """Suspicion score (0..100) and human-readable reasons for one region.
+
+    ``score`` is the sum of its reasons' points, capped. Keeping that true
+    is what lets an allowlisted rule be subtracted from the band without a
+    second set of books, so a verdict built by hand should honour it.
+    """
 
     base_addr: int
     size: int
@@ -270,25 +323,45 @@ class RegionVerdict:
         return self.score > 0
 
     @property
+    def effective_score(self) -> int:
+        """The score with the allowlisted rules taken out.
+
+        This is what bands the region. :attr:`score` stays raw so the table
+        still shows what the heuristics said, which is the one thing an
+        analyst reviewing a false positive needs to see. Nothing is
+        recomputed or discarded, so deleting an allowlist entry restores
+        the original verdict on the spot.
+        """
+        return min(sum(r.points for r in self.reasons if not r.allowed), 100)
+
+    @property
     def band(self) -> str:
-        """Triage band: "", "low", "review" or "likely injection".
+        """Triage band: "", "low", "review", "likely injection", "allowlisted".
 
         The empty string is for a region that scored nothing at all, which
         is most of them. "low" is a region that tripped something without
         reaching :data:`REVIEW_SCORE`: still shown, still tinted, but not
-        asking for the analyst's time.
+        asking for the analyst's time. "allowlisted" is a region that scored
+        only on rules an entry exempted for this process: the row and the
+        number stay, the verdict does not.
         """
-        if self.score >= LIKELY_SCORE:
+        if self.score <= 0:
+            return ""
+        effective = self.effective_score
+        if effective == 0:
+            return "allowlisted"
+        if effective >= LIKELY_SCORE:
             return "likely injection"
-        if self.score >= REVIEW_SCORE:
+        if effective >= REVIEW_SCORE:
             return "review"
-        return "low" if self.score > 0 else ""
+        return "low"
 
 
 def score_region(region: Region, *, head: bytes = b"",
                  rewritten: bool = False,
                  thread_start: bool = False,
-                 unpacked: bool = False) -> RegionVerdict:
+                 unpacked: bool = False,
+                 allowed: Collection[str] = ()) -> RegionVerdict:
     """Heuristic injection score for a single region.
 
     ``head`` is the first bytes of the region (from ReadProcessMemory) when
@@ -303,6 +376,13 @@ def score_region(region: Region, *, head: bytes = b"",
     between the same two looks (see :func:`unpacked_regions`). It stacks with
     ``rewritten``, deliberately: the bytes changing is one fact and what they
     changed into is another, and a private region that did both reaches 85.
+    ``allowed`` is the rule ids an allowlist entry exempts for the process
+    this region belongs to (see :class:`Allowlist`). A rule named there still
+    fires and still appears in the reasons, marked; it just does not count
+    towards :attr:`RegionVerdict.effective_score`, which is what bands the
+    region. Suppressing the verdict rather than the row is deliberate: a JIT
+    host exempted from the executable-private rule still scores on an ``MZ``
+    header or a NOP sled, so a stomped CLR is not hidden by its own entry.
     Scores are additive and capped at 100. A non-executable or non-committed
     region always scores 0.
     """
@@ -312,7 +392,7 @@ def score_region(region: Region, *, head: bytes = b"",
     reasons: list[Reason] = []
 
     def fired(rule: str, points: int, text: str) -> None:
-        reasons.append(Reason(rule, text, points))
+        reasons.append(Reason(rule, text, points, rule in allowed))
 
     # Structural: executable memory that is not backed by an image file is the
     # core injection tell (reflective loading, hollowing, raw shellcode).
