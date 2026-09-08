@@ -13,6 +13,7 @@ query on the pool thread, playback from what the recording stored.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -332,7 +333,18 @@ class RegionView(QWidget):
                 f"0x{region.base_addr:012x}: nothing readable to save"
             )
             return
-        Path(path).write_bytes(data)
+        target = Path(path)
+        try:
+            target.write_bytes(data)
+        except OSError as exc:
+            # A read failure already reports through the header; a write
+            # failure has to as well, or the analyst is told nothing at all.
+            # Whatever reached the disk before the error is not a dump of the
+            # region, so it does not stay behind looking like one.
+            with suppress(OSError):
+                target.unlink(missing_ok=True)
+            self.header.setText(f"save failed: {exc}")
+            return
         # A short save has two different causes and the analyst needs to know
         # which: the cap is our decision, a short read is the target's.
         if region.size > REGION_DUMP_MAX:

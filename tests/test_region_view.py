@@ -440,3 +440,31 @@ def test_save_region_read_failure_and_empty_read(qtbot, view, sample_regions,
     view.save_selected_region()
     assert "save failed" in view.header.text()
     assert not target.exists()
+def test_save_region_reports_a_write_failure(qtbot, view, sample_regions,
+                                             monkeypatch, tmp_path):
+    """A full disk or a read-only path is reported like a failed read is."""
+    monkeypatch.setattr(region_view_mod, "ProcessMemory",
+                        _fake_pm_class(sample_regions, read_bytes=b"A" * 4096))
+    view.show_live_process(1234, "proc.exe")
+    _wait_regions(qtbot, view, 2)
+    view.table.selectRow(0)
+    target = tmp_path / "region.bin"
+    _dialog(monkeypatch, str(target))
+
+    removed = []
+    def boom(self, data):
+        with open(target, "wb") as fh:
+            fh.write(b"partial")         # a truncated file reached the disk
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(region_view_mod.Path, "write_bytes", boom)
+    real_unlink = region_view_mod.Path.unlink
+    def track(self, missing_ok=False):
+        removed.append(str(self))
+        return real_unlink(self, missing_ok=missing_ok)
+    monkeypatch.setattr(region_view_mod.Path, "unlink", track)
+
+    view.save_selected_region()
+    assert "save failed" in view.header.text()
+    assert "No space left on device" in view.header.text()
+    assert removed == [str(target)]     # the partial file does not stay behind
+    assert not target.exists()
