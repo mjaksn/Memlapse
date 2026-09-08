@@ -810,3 +810,108 @@ def test_watching_another_process_compares_it_with_itself(qtbot, live_view):
     _wait_load(qtbot, v)
     assert "has exited" not in v.header.text()
     assert v._created == 9999
+
+
+# --- the allowlist: the row and the score stay, the verdict goes -----------
+def test_allowlisted_row_keeps_its_score_and_loses_the_heat(rmodel):
+    from PySide6.QtCore import Qt
+    from memlapse.analytics import RULE_PRIVATE_EXEC, RULE_RWX
+    region = _exec_private()          # private and executable: 50, no RWX
+    rmodel.set_regions([region])
+    hot = rmodel.data(rmodel.index(0, 0), Qt.BackgroundRole)
+    assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == "50"
+
+    rmodel.set_regions([region], allowed={RULE_PRIVATE_EXEC, RULE_RWX})
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    muted = rmodel.data(rmodel.index(0, 0), Qt.BackgroundRole)
+    assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == "50"  # raw, kept
+    assert tip.startswith("allowlisted: ")
+    assert tip.count("(allowlisted)") == 1   # marked, not hidden
+    assert muted != hot                      # neutral, not a heat colour
+    assert muted.red() == muted.green() == muted.blue()
+
+
+def test_allowlisting_one_rule_still_tints_on_what_is_left(rmodel):
+    """A stomped JIT host has to stay visible."""
+    from PySide6.QtCore import Qt
+    from memlapse.analytics import RULE_PRIVATE_EXEC, RULE_RWX
+    region = _exec_private()
+    heads = {region.base_addr: b"MZ" + bytes(range(256))}
+    rmodel.set_regions([region], heads,
+                       allowed={RULE_PRIVATE_EXEC, RULE_RWX})
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert tip.startswith("review: ")        # MZ and entropy still count
+    assert "PE header" in tip and "(allowlisted)" in tip
+    colour = rmodel.data(rmodel.index(0, 0), Qt.BackgroundRole)
+    assert not (colour.red() == colour.green() == colour.blue())
+
+
+def test_the_header_does_not_count_an_excused_rewrite(qtbot, monkeypatch):
+    """The band and the header have to agree, or the header shouts about
+    findings the allowlist has already excused."""
+    from memlapse.analytics import (
+        Allowlist, AllowlistEntry, RULE_PRIVATE_EXEC, RULE_REWRITTEN, RULE_RWX,
+    )
+    _MutablePM.regions_now = [_exec_private()]
+    _MutablePM.heads_now = {0x40000: b"aaa"}
+    _MutablePM.instance_created = 1000
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", _MutablePM)
+    book = Allowlist([
+        AllowlistEntry("jit.exe", rule, "JIT host")
+        for rule in (RULE_PRIVATE_EXEC, RULE_RWX, RULE_REWRITTEN)
+    ])
+    v = RegionView(allowlist=book)
+    qtbot.addWidget(v)
+    v.show()
+    v.show_live_process(1234, "jit.exe")
+    v._refresh.stop()
+    _wait_load(qtbot, v)
+    _MutablePM.heads_now = {0x40000: b"bbb"}   # a rewrite, and an excused one
+    v._on_refresh_tick()
+    _wait_load(qtbot, v)
+    assert v._live_rewritten == {0x40000}      # the detector still saw it
+    assert v.model.rewritten_count() == 0      # but it is not a finding
+    assert "rewritten while watching" not in v.header.text()
+
+
+def test_the_header_still_counts_a_rewrite_that_was_not_excused(qtbot,
+                                                                monkeypatch):
+    from memlapse.analytics import (
+        Allowlist, AllowlistEntry, RULE_PRIVATE_EXEC,
+    )
+    _MutablePM.regions_now = [_exec_private()]
+    _MutablePM.heads_now = {0x40000: b"aaa"}
+    _MutablePM.instance_created = 1000
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", _MutablePM)
+    book = Allowlist([AllowlistEntry("jit.exe", RULE_PRIVATE_EXEC)])
+    v = RegionView(allowlist=book)
+    qtbot.addWidget(v)
+    v.show()
+    v.show_live_process(1234, "jit.exe")
+    v._refresh.stop()
+    _wait_load(qtbot, v)
+    _MutablePM.heads_now = {0x40000: b"bbb"}
+    v._on_refresh_tick()
+    _wait_load(qtbot, v)
+    assert v.model.rewritten_count() == 1
+    assert "1 rewritten while watching" in v.header.text()
+
+
+def test_a_process_with_no_entry_scores_as_it_always_did(qtbot, monkeypatch):
+    from memlapse.analytics import Allowlist, AllowlistEntry, RULE_PRIVATE_EXEC
+    from PySide6.QtCore import Qt
+    _MutablePM.regions_now = [_exec_private()]
+    _MutablePM.heads_now = {0x40000: b"aaa"}
+    _MutablePM.instance_created = 1000
+    monkeypatch.setattr(region_view_mod, "ProcessMemory", _MutablePM)
+    book = Allowlist([AllowlistEntry("jit.exe", RULE_PRIVATE_EXEC)])
+    v = RegionView(allowlist=book)
+    qtbot.addWidget(v)
+    v.show()
+    v.show_live_process(1234, "other.exe")   # not the allowlisted image
+    v._refresh.stop()
+    _wait_load(qtbot, v)
+    tip = v.model.data(v.model.index(0, 0), Qt.ToolTipRole)
+    assert tip.startswith("review: ")        # 50, exactly as before
+    assert "(allowlisted)" not in tip
+

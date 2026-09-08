@@ -205,6 +205,10 @@ RULE_UNPACKED = "unpacked"
 RULE_REWRITTEN = "rewritten"
 RULE_IMAGE_REWRITTEN = "image-rewritten"
 
+#: Band for a region that scored only on rules an allowlist entry excused.
+#: Named rather than spelled out at each use, since the UI switches on it.
+ALLOWLISTED = "allowlisted"
+
 
 @dataclass(frozen=True, slots=True)
 class Reason:
@@ -349,7 +353,7 @@ class RegionVerdict:
             return ""
         effective = self.effective_score
         if effective == 0:
-            return "allowlisted"
+            return ALLOWLISTED
         if effective >= LIKELY_SCORE:
             return "likely injection"
         if effective >= REVIEW_SCORE:
