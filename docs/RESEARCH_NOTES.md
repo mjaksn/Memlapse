@@ -217,8 +217,8 @@ already deduplicated by content, so entropy is computed from the two heads
 at read time, and only for the regions the rewrite detector already flagged,
 which is the only set where the content can have moved at all. It stacks
 with the rewrite, so a private region that decrypted itself scores 85. This
-is playback only: live mode compares one refresh with the next and does not
-keep the earlier bytes.
+is playback only: head bytes are captured by the recorder alone, so the live
+view has no earlier content to compare and the rule stays silent there.
 
 ### 2.4 Catch short-lived processes and record lineage at creation. Part shipped
 
