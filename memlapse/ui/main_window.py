@@ -50,6 +50,9 @@ class MainWindow(QMainWindow):
         self._mode = "live"          # "live" | "playback"
         self._selected_pid: int | None = None
         self._selected_name: str = ""
+        # Owned by the GUI thread; each collector hands its total over.
+        self._process_count = 0
+        self._dropped = {"process": 0, "system": 0}
 
         # --- central layout ------------------------------------------------
         self.process_view = ProcessView(self)
@@ -99,11 +102,17 @@ class MainWindow(QMainWindow):
         self.collector = ProcessCollector(interval=1.0, parent=self)
         self.collector.updated.connect(self._on_processes)
         self.collector.updated.connect(self.dashboard.update_processes)
+        self.collector.dropped.connect(
+            lambda total: self._on_dropped("process", total)
+        )
         self.collector.start()
 
         # --- system-wide memory stream (drives the dashboard) --------------
         self.system_collector = SystemCollector(interval=1.0, parent=self)
         self.system_collector.updated.connect(self.dashboard.update_system)
+        self.system_collector.dropped.connect(
+            lambda total: self._on_dropped("system", total)
+        )
         self.system_collector.start()
 
     # --- toolbar ----------------------------------------------------------
@@ -137,19 +146,26 @@ class MainWindow(QMainWindow):
     def _on_processes(self, rows: list[ProcessInfo]) -> None:
         if self._mode == "live":
             self.process_view.update_processes(rows)
-            # Latest-only delivery drops a poll when the GUI is still busy
-            # with the last one. Counting them is only honest if it shows, and
-            # both streams drop independently: the system poll feeds the
-            # dashboard, so its drops are invisible unless they are named.
-            drops = [
-                (self.collector.skipped, "process"),
-                (self.system_collector.skipped, "system"),
-            ]
-            note = "".join(
-                f", {count} {label} polls dropped"
-                for count, label in drops if count
-            )
-            self._status_label.setText(f"{len(rows)} processes{note}")
+            self._process_count = len(rows)
+            self._refresh_status()
+
+    def _on_dropped(self, which: str, total: int) -> None:
+        """Record a collector's dropped-poll total, handed over by signal.
+
+        Latest-only delivery drops a poll when the GUI is still busy with the
+        last one, and counting them is only honest if it shows. Both streams
+        drop independently, so each is named: the system poll feeds the
+        dashboard, and its drops would otherwise be invisible.
+        """
+        self._dropped[which] = total
+        self._refresh_status()
+
+    def _refresh_status(self) -> None:
+        note = "".join(
+            f", {self._dropped[which]} {which} polls dropped"
+            for which in ("process", "system") if self._dropped[which]
+        )
+        self._status_label.setText(f"{self._process_count} processes{note}")
 
     def _on_process_selected(self, pid: int, name: str) -> None:
         self._selected_pid = pid

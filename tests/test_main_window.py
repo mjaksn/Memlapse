@@ -276,26 +276,29 @@ def test_playback_seek_scores_rewritten_regions(main_window):
 # --- dropped polls are surfaced, not swallowed -----------------------------
 def test_status_bar_reports_dropped_polls(main_window, make_process):
     win, _ = main_window
-    win.collector.skipped = 3
     win.collector.updated.emit([make_process(pid=1)])
+    win.collector.dropped.emit(3)
     assert "3 process polls dropped" in win._status_label.text()
-    win.collector.skipped = 0
-    win.collector.updated.emit([make_process(pid=1)])
-    assert "dropped" not in win._status_label.text()
 
 
 def test_status_bar_names_the_stream_that_fell_behind(main_window, make_process):
     """Both collectors drop independently; a silent one is indistinguishable
     from one that is keeping up."""
     win, _ = main_window
-    win.system_collector.skipped = 2
     win.collector.updated.emit([make_process(pid=1)])
+    win.system_collector.dropped.emit(2)
     text = win._status_label.text()
     assert "2 system polls dropped" in text
     assert "process polls" not in text
-    win.collector.skipped = 4
-    win.collector.updated.emit([make_process(pid=1)])
-    assert "4 process polls dropped, 2 system polls dropped" in win._status_label.text()
+    win.collector.dropped.emit(4)
+    assert ("1 processes, 4 process polls dropped, 2 system polls dropped"
+            == win._status_label.text())
+
+
+def test_status_bar_is_quiet_while_nothing_is_dropped(main_window, make_process):
+    win, _ = main_window
+    win.collector.updated.emit([make_process(pid=1), make_process(pid=2)])
+    assert win._status_label.text() == "2 processes"
 
 
 # --- a recorded thread start reaches the region view -----------------------

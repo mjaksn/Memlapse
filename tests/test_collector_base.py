@@ -3,6 +3,7 @@
 import time
 
 import pytest
+from PySide6.QtCore import Qt
 
 from memlapse.collectors.base import PollingCollector
 
@@ -32,7 +33,11 @@ def test_stop_sets_flag(qapp):
 def test_drops_polls_until_previous_snapshot_is_dequeued(qtbot):
     c = Counting(interval=0.001)
     received = []
+    announced = []
     c.updated.connect(received.append)
+    # Direct, so the count is seen on the collector thread as it is announced;
+    # the GUI gets it queued and never reads the attribute itself.
+    c.dropped.connect(announced.append, Qt.DirectConnection)
     c.start()
     # No event processing here, so the first emit is never dequeued and every
     # later poll must be dropped rather than queued.
@@ -43,6 +48,7 @@ def test_drops_polls_until_previous_snapshot_is_dequeued(qtbot):
     c.wait(1000)
     assert c.skipped >= 3
     assert c.polls == c.skipped + 1  # exactly one snapshot was emitted
+    assert announced == list(range(1, c.skipped + 1))  # every drop announced
 
     qtbot.waitUntil(lambda: received == [1], timeout=1000)
     assert c._delivered.is_set()  # marker ran when the event was dequeued

@@ -9,10 +9,11 @@ thread ever took longer to consume a snapshot than the collector took to
 produce the next one, unconsumed snapshots would pile up in the event queue
 and the lag would grow without bound. To prevent that, the collector only
 emits when the previous snapshot has been dequeued on the GUI thread, and
-otherwise drops the poll (counted in :attr:`skipped`). The marker slot is
-connected first, so it runs before the widgets' slots for the same emit;
-the bound is therefore one snapshot being processed plus at most one more
-waiting in the queue.
+otherwise drops the poll (counted in :attr:`skipped` and announced on the
+``dropped`` signal, so the GUI never has to read the counter across the
+thread boundary). The marker slot is connected first, so it runs before the
+widgets' slots for the same emit; the bound is therefore one snapshot being
+processed plus at most one more waiting in the queue.
 """
 
 from __future__ import annotations
@@ -28,6 +29,11 @@ class PollingCollector(QThread):
 
     #: Emitted with the snapshot returned by ``_poll()``; queued to the GUI.
     updated = Signal(object)
+    #: Emitted with the running total each time a poll is dropped. The count
+    #: belongs to this thread, so it is handed over rather than read across
+    #: the boundary; one small int on a drop cannot pile up the way snapshots
+    #: would, since a drop happens at most once an interval.
+    dropped = Signal(int)
 
     def __init__(self, interval: float = 1.0, parent=None) -> None:
         super().__init__(parent)
@@ -51,6 +57,7 @@ class PollingCollector(QThread):
                 self.updated.emit(snapshot)
             else:
                 self.skipped += 1
+                self.dropped.emit(self.skipped)
             self._sleep_remaining(start)
 
     def _mark_delivered(self) -> None:  # runs on the GUI thread

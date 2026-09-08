@@ -90,6 +90,7 @@ class FakeCollector(QObject):
     """Stand-in for ProcessCollector: no real polling thread."""
 
     updated = Signal(list)
+    dropped = Signal(int)  # the real collector announces each dropped poll
 
     def __init__(self, interval=1.0, parent=None):
         super().__init__(parent)
