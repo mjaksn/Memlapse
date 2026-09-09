@@ -532,7 +532,8 @@ class RegionView(QWidget):
             return
         if not self._live or self._pid is None:
             self.header.setText(
-                "Saving bytes is live only; a recording keeps 256 bytes a region."
+                "Saving bytes is live only; a recording keeps the first 256 "
+                "bytes of each executable region."
             )
             return
         path, _filter = QFileDialog.getSaveFileName(
