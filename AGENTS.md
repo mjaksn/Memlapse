@@ -61,7 +61,7 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 456 passed with 100 percent line and branch
+(2026-09-06); the test run is 459 passed with 100 percent line and branch
 coverage (2026-09-09).
 
 ## Conventions
@@ -141,6 +141,13 @@ coverage (2026-09-09).
   tick, so nothing stops the pid being reused between two samples and a
   stranger's map being appended to the same recording. That is why every
   sample stores `created_ft`; `Dao.instance_changes` reports where it changed.
+- A `QRunnable` auto-deletes by default, so a `QThreadPool` destroys it the
+  moment `run()` returns and any Python reference kept to it is left pointing
+  at freed C++. Keeping one, as `PlaybackEngine` does so it can cancel the
+  walk, means `setAutoDelete(False)` and dropping the reference when the
+  worker reports. A pool substituted in tests deletes nothing, so the suite
+  cannot see this: it showed up as `Internal C++ object already deleted` on
+  the second recording opened, in the real app only.
 - Coverage does not trace the threads a Qt pool or a `QThread` creates, so a
   `run()` reached only through `start()` reads as uncovered however often it
   executes. Test a runnable by calling `run()` on the test thread, as

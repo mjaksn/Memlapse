@@ -916,3 +916,41 @@ def test_a_stopped_walk_reads_no_further(tmp_db, monkeypatch):
         assert got == [{}]      # abandoned, not a walk that found nothing
     finally:
         engine.close()
+
+
+def test_the_walk_is_not_deleted_out_from_under_the_engine(tmp_db):
+    """A pool deletes an auto-delete runnable as soon as run() returns.
+
+    The engine keeps the worker so it can take it back off the pool or ask it
+    to stop, and a deleted C++ object handed to tryTake raises. The inline
+    pool used everywhere here never deletes anything, so nothing but this
+    says the app does not fall over on the second recording opened.
+    """
+    worker = playback_mod._HistoryWorker(tmp_db, 1, 1)
+    assert worker.autoDelete() is False
+
+
+def test_a_finished_walk_is_let_go_of(tmp_db):
+    """Nothing to retire once it has reported, and nothing safe to touch.
+
+    Holding on would mean the next open or close reaching for a worker the
+    pool has already destroyed, which is the same crash from the other side.
+    """
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(_rewrite_db(tmp_db, [(1_000, b"aaa"), (2_000, b"bbb")]))
+        assert engine.rewrites          # the walk really did land
+        assert engine._worker is None
+    finally:
+        engine.close()
+
+
+def test_a_failed_walk_is_let_go_of_too(tmp_db):
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(_rewrite_db(tmp_db, [(1_000, b"aaa")]))
+        engine._worker = playback_mod._HistoryWorker(tmp_db, 1, engine._sequence)
+        engine._history_gave_up(engine._sequence, "gone")
+        assert engine._worker is None
+    finally:
+        engine.close()

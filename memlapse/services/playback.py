@@ -155,6 +155,11 @@ class _HistoryWorker(QRunnable):
         self._recording_id = recording_id
         self._sequence = sequence
         self._stopped = False
+        # A QThreadPool deletes an auto-delete runnable the moment run()
+        # returns, which leaves the engine holding a Python wrapper around a
+        # C++ object that is gone; the next tryTake() on it raises. The
+        # engine drops finished workers itself, so ownership stays here.
+        self.setAutoDelete(False)
 
     def stop(self) -> None:
         """Ask a walk already running to give up at the next sample."""
@@ -402,6 +407,9 @@ class PlaybackEngine(QObject):
         """Take a finished walk, unless it is answering a stale question."""
         if sequence != self._sequence:
             return
+        # It has reported, so there is nothing left to retire and nothing
+        # left to take off the pool.
+        self._worker = None
         self._spells = spells
         self.rewrites = {
             identity: [t for _, _, times in runs for t in times]
@@ -413,6 +421,7 @@ class PlaybackEngine(QObject):
         """A walk failed. Same staleness rule as a walk that succeeded."""
         if sequence != self._sequence:
             return
+        self._worker = None
         self.history_failed.emit(message)
 
     def _retire_walk(self) -> None:
