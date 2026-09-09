@@ -197,8 +197,18 @@ class MainWindow(QMainWindow):
             self.playback.close()
             self.playback = None
         self._refresh_status()   # the live counts, including any drops, return
-        self.region_view.header.setText("Select a process to inspect its memory map.")
-        self.region_view.model.set_regions([])
+        # Coming back from playback must land where live mode left off. The
+        # selection never changed, so clearing the map and leaving Record
+        # disabled strands the analyst: re-picking the same row emits nothing,
+        # since the process view still holds it as the current selection.
+        self.record_action.setEnabled(self._selected_pid is not None)
+        if self._selected_pid is not None:
+            self.region_view.show_live_process(self._selected_pid,
+                                               self._selected_name)
+        else:
+            self.region_view.header.setText(
+                "Select a process to inspect its memory map.")
+            self.region_view.model.set_regions([])
         self.statusBar().showMessage("Live mode", 3000)
 
     # --- recording --------------------------------------------------------
