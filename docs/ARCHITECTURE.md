@@ -676,6 +676,16 @@ the largest process measured on this machine.
   close, so a long recording still being walked when the analyst opens a
   short one cannot overwrite what is on screen, and one still running when
   playback is left cannot report against a closed connection.
+- Dropping the answer is not the same as not doing the work, so the walk is
+  retired as well as ignored: taken back off the pool if it has not started,
+  and asked to stop at its next sample if it has. Without that, switching
+  between recordings queues a full scan of each one and the recording being
+  waited for sits behind scans nobody wants. Best effort by nature, since a
+  walk inside its last sample finishes it.
+- A walk that cannot run says so on `history_failed`, and the status bar
+  reports it. An empty scrubber is exactly what a recording with no rewrites
+  looks like, so a failed walk that said nothing would read as a quiet
+  process: a claim about the target rather than about the walk.
 - Scoring is O(head length) per region and runs on the GUI thread only at
   `set_regions` time (per seek or per live refresh), which is negligible. The
   live change detector compares head bytes directly rather than hashing them,

@@ -154,3 +154,26 @@ def test_nothing_is_painted_without_marks(timeline):
     slider.setFixedSize(220, 24)
     timeline.set_sample_times(TIMES)
     assert _marked_columns(slider) == set()
+
+
+def test_the_marks_are_announced_and_not_only_painted(qtbot):
+    """Painted pixels tell a screen reader nothing.
+
+    A slider exposes its value and its range, so without this the samples
+    worth scrubbing to exist only for someone who can see them.
+    """
+    from memlapse.ui.timeline import MarkedSlider
+    slider = MarkedSlider()
+    qtbot.addWidget(slider)
+    assert slider.accessibleDescription() == ""
+
+    slider.set_marks([0, 3])
+    said = slider.accessibleDescription()
+    assert "2 samples marked as rewritten" in said
+    assert said.endswith("1, 4")        # counted from one, as the label is
+
+    slider.set_marks([2])
+    assert "1 sample marked as rewritten" in slider.accessibleDescription()
+
+    slider.set_marks([])
+    assert slider.accessibleDescription() == ""

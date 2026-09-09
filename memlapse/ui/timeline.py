@@ -54,6 +54,15 @@ class MarkedSlider(QSlider):
 
     def set_marks(self, values) -> None:
         self._marks = sorted(set(values))
+        # The ticks are painted pixels and nothing else, so a slider reports
+        # only its value and range and a screen reader has no way to learn
+        # that some samples are worth stopping at. This does not make a mark
+        # navigable, but it does stop the marks being silent.
+        self.setAccessibleDescription(
+            "" if not self._marks else
+            f"{len(self._marks)} sample"
+            f"{'' if len(self._marks) == 1 else 's'} marked as rewritten: "
+            + ", ".join(str(m + 1) for m in self._marks))
         self.update()
 
     def paintEvent(self, event) -> None:
