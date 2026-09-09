@@ -339,3 +339,26 @@ def test_region_samples_leaves_out_a_guard_page(dao, make_region):
 
 def test_region_samples_of_an_unknown_recording_yields_nothing(dao):
     assert _walk(dao, 999) == []
+
+
+def test_region_samples_keeps_a_sample_whose_map_was_empty(dao, make_region):
+    """A sample with no region rows at all, which is not the same as one
+    whose rows were all filtered out.
+
+    Every other empty-sample test here still writes region rows and lets the
+    query drop them, so the tick survives in region_snapshot either way. A
+    sample whose map came back empty writes no region row at all, and taking
+    the tick list from that table would lose it and hand the caller the
+    samples on either side as a consecutive pair. The bytes below change
+    across the gap, so that mistake reports a rewrite in place that never
+    happened.
+    """
+    region = _exec_region(make_region, 0x10000)
+    rid = dao.create_recording(1000, "p.exe", 0)
+    dao.add_sample(rid, 1_000, _state(1_000), [region], {0x10000: b"aaa"})
+    dao.add_sample(rid, 2_000, _state(2_000), [])            # no rows at all
+    dao.add_sample(rid, 3_000, _state(3_000), [region], {0x10000: b"bbb"})
+
+    walked = _walk(dao, rid)
+    assert [ts for ts, _, _ in walked] == [1_000, 2_000, 3_000]
+    assert [len(regions) for _, regions, _ in walked] == [1, 0, 1]

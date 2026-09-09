@@ -215,17 +215,24 @@ class Dao:
         asked to fetch less.
 
         Every sample the recording has is yielded even so, empty when nothing
-        in it survived, and that is the part to be careful with. Skipping an
-        empty sample would leave the samples either side of it looking
-        consecutive, so a region that dropped out of the map for one tick and
-        came back holding different bytes would read as rewritten in place,
-        which is a different event with a different meaning.
+        in it survived and empty when the map itself was, and that is the part
+        to be careful with. Skipping an empty sample would leave the samples
+        either side of it looking consecutive, so a region that dropped out of
+        the map for one tick and came back holding different bytes would read
+        as rewritten in place, which is a different event with a different
+        meaning. The ticks therefore come from ``process_snapshot``, the one
+        table with a row per sample whatever the map held.
 
         A generator on purpose: the caller holds two samples at a time, never
         the recording.
         """
+        # From process_snapshot, which holds exactly one row per sample even
+        # when the map came back empty. Taken from region_snapshot instead, a
+        # sample with no regions at all would not appear, and the samples on
+        # either side of it would be handed to the caller as consecutive,
+        # which is the very thing the paragraph above promises not to do.
         ticks = self.conn.execute(
-            "SELECT DISTINCT ts_us FROM region_snapshot WHERE recording_id=? "
+            "SELECT ts_us FROM process_snapshot WHERE recording_id=? "
             "ORDER BY ts_us",
             (recording_id,),
         )
