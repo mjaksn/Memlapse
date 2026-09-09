@@ -898,6 +898,43 @@ def test_a_held_back_row_with_no_head_says_nothing_could_be_read(rmodel):
     assert "nothing here but the shape of the map" not in tip
 
 
+def test_the_read_flag_is_per_region_not_per_refresh(rmodel):
+    """One region read and one not, in the same call, must read differently.
+
+    A read can fail for a single region: it goes away between the
+    VirtualQueryEx walk and the read, or its pages are inaccessible while the
+    rest of the process reads fine. An all-or-nothing flag would tell the
+    analyst the content rules came back clean on bytes nobody fetched.
+    """
+    from PySide6.QtCore import Qt
+    read = _exec_private_rwx(0x40000)
+    unread = _exec_private_rwx(0x50000)
+    rmodel.set_regions([read, unread], {read.base_addr: bytes(64)})
+    first = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    second = rmodel.data(rmodel.index(1, 0), Qt.ToolTipRole)
+    assert "nothing here but the shape of the map" in first
+    assert "no bytes could be read" in second
+
+
+def test_an_excused_signal_is_not_reported_as_an_absent_one(rmodel):
+    """Held back because a rule was allowlisted, not because nothing fired.
+
+    The row lists the PE header it found and then has to explain a review
+    band. Saying there was nothing but the map would contradict the line
+    above it in the same tooltip.
+    """
+    from PySide6.QtCore import Qt
+    from memlapse.analytics import RULE_PE_HEADER
+    region = _exec_private_rwx()
+    heads = {region.base_addr: b"MZ" + bytes(62)}
+    rmodel.set_regions([region], heads, allowed={RULE_PE_HEADER})
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert "PE header" in tip and "(allowlisted)" in tip
+    assert "are allowlisted here" in tip
+    assert "nothing here but the shape of the map" not in tip
+    assert "no bytes could be read" not in tip
+
+
 # --- playback scores against the same entries as live ----------------------
 def test_playback_applies_the_allowlist_like_live_does(qtbot):
     """A replay of a watch has to reach the watch's verdict."""

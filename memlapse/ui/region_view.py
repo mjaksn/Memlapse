@@ -35,7 +35,8 @@ from PySide6.QtWidgets import (
 )
 
 from ..analytics import (
-    ALLOWLISTED, Allowlist, LIKELY_SCORE, RULE_IMAGE_REWRITTEN, RULE_REWRITTEN,
+    ALLOWLISTED, Allowlist, LIKELY_SCORE, MAP_SHAPE_RULES,
+    RULE_IMAGE_REWRITTEN, RULE_REWRITTEN,
     RegionVerdict, regions_with_thread_starts, rewritten_regions, score_region,
     unpacked_regions,
 )
@@ -55,8 +56,11 @@ HEX_PREVIEW_BYTES = 512
 REGION_DUMP_MAX = 16 * 1024 * 1024
 
 #: How often the live map is re-enumerated while the view is on screen. Matches
-#: the recorder's default one second cadence, so what the live detector shows
-#: is what a recording of the same process would replay.
+#: the recorder's default one second cadence, so the live detector sees the
+#: same moments a recording of the same process captures. It does not follow
+#: that the two band a moment alike: live carries a rewrite forward and
+#: playback does not, which ARCHITECTURE.md records under the content-change
+#: detector.
 LIVE_REFRESH_MS = 1000
 
 
@@ -175,18 +179,26 @@ class RegionTableModel(QAbstractTableModel):
                     f"{r.text} (allowlisted)" if r.allowed else r.text
                     for r in verdict.reasons))
                 # A row can now show a top-band number in the review band,
-                # which looks like a bug unless the row says why. Say which
-                # of the two reasons it is: nothing was found in the bytes,
-                # or there were no bytes to look at.
+                # which looks like a bug unless the row says why. There are
+                # three ways to get here and they are not the same news: a
+                # signal was excused, no signal was found, or nothing could
+                # be looked at. Only the middle one is evidence of calm.
                 if (verdict.map_shape_only
                         and verdict.effective_score >= LIKELY_SCORE):
-                    if r.base_addr in self._read:
+                    excused = any(x.allowed and x.rule not in MAP_SHAPE_RULES
+                                  for x in verdict.reasons)
+                    if excused:
+                        tip += ("; held at review: the signals from outside "
+                                "the map are allowlisted here, so only the "
+                                "shape of it still counts")
+                    elif r.base_addr in self._read:
                         tip += ("; held at review: nothing here but the shape "
                                 "of the map, which is what a JIT compiler "
                                 "leaves too")
                     else:
                         tip += ("; held at review: no bytes could be read "
-                                "here, so only the map had anything to say")
+                                "here, so nothing but the map and the thread "
+                                "list had anything to say")
                 return tip
         return None
 

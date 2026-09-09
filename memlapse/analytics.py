@@ -355,21 +355,24 @@ class RegionVerdict:
     def map_shape_only(self) -> bool:
         """Every rule still counting came from the memory map alone.
 
-        True for a region whose whole case is its type and its protection:
-        nothing that was read matched a content rule, no thread was found
-        starting here, and the bytes did not change between two looks.
-        See :data:`MAP_SHAPE_RULES`.
+        This is about what counts, not about what was observed. A content or
+        temporal rule that fired and was then excused by an allowlist entry
+        leaves the region map-shape-only just as surely as one that never
+        fired, because the band follows the points that are left. Read it as
+        "nothing outside the map is still counting", never as "nothing
+        outside the map was found". See :data:`MAP_SHAPE_RULES`.
 
-        This cannot say why the other rules stayed silent, and the two
-        reasons are not the same. A head that was read and matched nothing is
-        evidence; a head that could not be read is the absence of it. Where
-        no bytes are available at all, which is an unelevated target that
-        denies ``PROCESS_VM_READ`` and any recording made against one, no
-        content or temporal rule can fire for any region, this is true
-        everywhere, and the top band is unreachable for that process. That
-        is a real limit on what the scorer can conclude, not a quiet one:
-        the caller knows whether it got bytes and the region view says so on
-        the row.
+        It also cannot say why a rule stayed silent, and the reasons are not
+        equivalent. A head that was read and matched nothing is evidence; a
+        head that could not be read is the absence of it. Where no bytes are
+        available at all, which is an unelevated target that denies
+        ``PROCESS_VM_READ`` and any recording made against one, no content or
+        temporal rule can fire for any region. The top band is not out of
+        reach even then: :data:`RULE_THREAD_START` needs no bytes, only a
+        thread query, so private memory with a thread starting in it still
+        reaches 75 without the map carrying it. What is lost is every rule
+        that depends on the content. The caller knows whether it got bytes,
+        and the region view says so on the row.
         """
         counting = {r.rule for r in self.reasons if not r.allowed}
         return bool(counting) and counting <= MAP_SHAPE_RULES
