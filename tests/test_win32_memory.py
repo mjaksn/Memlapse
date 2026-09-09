@@ -61,8 +61,12 @@ def test_open_invalid_pid_raises():
 
 # --- failure branches via a fake kernel32 ----------------------------------
 class FakeKernel:
-    def __init__(self, open_result):
+    def __init__(self, open_result, exit_code=None):
         self._open_result = open_result
+        #: None means GetExitCodeProcess fails outright; otherwise the code it
+        #: reports. 259 is STILL_ACTIVE, which is how a live target answers.
+        self._exit_code = 259 if exit_code is None else exit_code
+        self._exit_ok = exit_code is not False
 
     def OpenProcess(self, access, inherit, pid):
         return self._open_result(access)
@@ -81,6 +85,12 @@ class FakeKernel:
 
     def GetProcessTimes(self, handle, created, exited, kernel, user):
         return 0  # simulated query failure
+
+    def GetExitCodeProcess(self, handle, code_out):
+        if not self._exit_ok:
+            return 0
+        code_out._obj.value = self._exit_code
+        return 1
 
 
 def test_fallback_to_query_limited(monkeypatch):
@@ -112,3 +122,46 @@ def test_double_close_is_safe(monkeypatch):
     pm = ProcessMemory(1234)
     pm.close()
     pm.close()  # second close must be a no-op
+
+
+# --- an exited target must not read as a process with no memory ------------
+def test_an_empty_walk_on_a_dead_target_raises(monkeypatch):
+    """The pid survives the process, and so does its creation time.
+
+    An open handle pins the pid, and GetProcessTimes keeps answering with the
+    original creation time, so neither the pid nor the identity check notices
+    the target is gone. VirtualQueryEx is simply refused and the walk ends at
+    once. Returning that as a clean empty map would wipe the last real map the
+    analyst had while the header still called it current.
+    """
+    monkeypatch.setattr(memory, "_kernel32",
+                        FakeKernel(lambda access: 4321, exit_code=0))
+    with ProcessMemory(1234) as pm:
+        assert pm.has_exited()
+        with pytest.raises(ProcessAccessError, match="has exited"):
+            pm.regions()
+
+
+def test_an_empty_walk_on_a_live_target_is_returned_as_empty(monkeypatch):
+    """Only death explains it away; anything else stays the caller's problem."""
+    monkeypatch.setattr(memory, "_kernel32", FakeKernel(lambda access: 4321))
+    with ProcessMemory(1234) as pm:
+        assert not pm.has_exited()          # 259, STILL_ACTIVE
+        assert pm.regions() == []
+
+
+def test_an_unanswerable_exit_code_is_not_treated_as_death(monkeypatch):
+    """GetExitCodeProcess itself failing says nothing, so claim nothing."""
+    monkeypatch.setattr(memory, "_kernel32",
+                        FakeKernel(lambda access: 4321, exit_code=False))
+    with ProcessMemory(1234) as pm:
+        assert not pm.has_exited()
+        assert pm.regions() == []
+
+
+def test_this_process_has_not_exited():
+    """Real call: a wrong prototype or a wrong constant would pass a fake."""
+    with ProcessMemory(os.getpid()) as pm:
+        assert not pm.has_exited()
+    with ProcessMemory(os.getpid(), want_read=False) as limited:
+        assert not limited.has_exited()      # the query-only handle too

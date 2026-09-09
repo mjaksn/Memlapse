@@ -62,6 +62,16 @@ _kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [
     ctypes.POINTER(wintypes.FILETIME)
 ] * 4
 
+_kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+_kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE,
+                                         ctypes.POINTER(wintypes.DWORD)]
+
+#: GetExitCodeProcess returns this while the process is still running. A
+#: process that genuinely exits with 259 is indistinguishable from a live one,
+#: which is why this is only ever consulted to explain an already-anomalous
+#: result, never as a liveness check on its own.
+_STILL_ACTIVE = 259
+
 
 class ProcessAccessError(OSError):
     """Raised when a process cannot be opened (usually needs elevation)."""
@@ -142,7 +152,31 @@ class ProcessMemory:
                     type=mbi.Type,
                 ))
             address = (mbi.BaseAddress or address) + region_size
+        if not out and self.has_exited():
+            # A live process always has mapped memory, so an empty walk means
+            # VirtualQueryEx was refused rather than answered. The handle keeps
+            # the pid alive after the process dies, and GetProcessTimes still
+            # returns the original creation time, so neither the pid nor the
+            # identity check notices. Reporting this as a clean map of a
+            # process with no memory would wipe the last real map the analyst
+            # had, and the header would call the result current.
+            raise ProcessAccessError(
+                f"process {self.pid} has exited; its address space is gone"
+            )
         return out
+
+    def has_exited(self) -> bool:
+        """Whether the target has terminated, as far as this handle can tell.
+
+        Read-only: needs no access beyond what the handle already holds, and
+        works on the query-only fallback handle. False for a process that
+        exited with code 259, which cannot be told from a running one; that
+        is why callers use this to explain a failure, not to poll for one.
+        """
+        code = wintypes.DWORD()
+        if not _kernel32.GetExitCodeProcess(self._handle, ctypes.byref(code)):
+            return False        # cannot tell, so do not claim it is gone
+        return code.value != _STILL_ACTIVE
 
     def read(self, address: int, size: int) -> bytes:
         """Best-effort read; returns however many bytes were actually read."""
