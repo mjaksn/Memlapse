@@ -169,9 +169,13 @@ UNPACKED_POINTS = 20
 #: image, so a start anywhere else is the shellcode-with-a-thread case.
 THREAD_START_POINTS = 25
 
-#: Score at or above which a region is worth a second look, and the score at
-#: which it is worth acting on. Three bands rather than one threshold: the
-#: lower edge is deliberately low, because a signal that scores 30 and is
+#: Score at or above which a region is worth a second look, and the points
+#: floor for the band worth acting on. The floor is necessary and not
+#: sufficient: reaching :data:`LIKELY_SCORE` earns the top band only with a
+#: point from outside :data:`MAP_SHAPE_RULES` as well, and 50 + 25 on private
+#: RWX is exactly the case that does not qualify. See
+#: :attr:`RegionVerdict.band`, which is the only thing that decides a band.
+#: The lower edge is deliberately low, because a signal that scores 30 and is
 #: never shown as anything but a number is a signal nobody triages.
 REVIEW_SCORE = 30
 LIKELY_SCORE = 75
@@ -262,8 +266,10 @@ class Allowlist:
     """
 
     def __init__(self, entries: Collection[AllowlistEntry] = ()) -> None:
-        # Materialise first: entries may arrive as a cursor or a generator,
-        # and indexing it below would consume it.
+        #: The entries as given, kept so a caller can show what was excused
+        #: and on whose say-so rather than applying it silently. The lookup
+        #: below throws the notes away, and an allowlist nobody can read back
+        #: is the kind that quietly hides a finding.
         self.entries = tuple(entries)
         self._by_image: dict[str, frozenset[str]] = {}
         for entry in self.entries:
@@ -349,11 +355,21 @@ class RegionVerdict:
     def map_shape_only(self) -> bool:
         """Every rule still counting came from the memory map alone.
 
-        True for a region whose whole case is its type and its protection.
-        Live mode reads the head of every executable region, so this does not
-        mean nothing was read: it means nothing that was read matched a
-        content rule, no thread was found starting here, and the bytes did
-        not change between two looks. See :data:`MAP_SHAPE_RULES`.
+        True for a region whose whole case is its type and its protection:
+        nothing that was read matched a content rule, no thread was found
+        starting here, and the bytes did not change between two looks.
+        See :data:`MAP_SHAPE_RULES`.
+
+        This cannot say why the other rules stayed silent, and the two
+        reasons are not the same. A head that was read and matched nothing is
+        evidence; a head that could not be read is the absence of it. Where
+        no bytes are available at all, which is an unelevated target that
+        denies ``PROCESS_VM_READ`` and any recording made against one, no
+        content or temporal rule can fire for any region, this is true
+        everywhere, and the top band is unreachable for that process. That
+        is a real limit on what the scorer can conclude, not a quiet one:
+        the caller knows whether it got bytes and the region view says so on
+        the row.
         """
         counting = {r.rule for r in self.reasons if not r.allowed}
         return bool(counting) and counting <= MAP_SHAPE_RULES
@@ -378,8 +394,10 @@ class RegionVerdict:
         "likely injection" takes a signal from somewhere else: bytes that
         matched a content rule, a thread found starting in the region, or a
         change between two looks at it. Measured on this machine on
-        2026-09-08, that is the whole of the difference: every region in the
-        top band scored on nothing but private plus RWX.
+        2026-09-08, across the processes whose memory could be read, that is
+        the whole of the difference: every region in the top band scored on
+        nothing but private plus RWX. Where nothing can be read the top band
+        is unreachable; see :attr:`map_shape_only`.
         """
         if self.score <= 0:
             return ""

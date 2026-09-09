@@ -325,7 +325,7 @@ combination is the highest-signal heuristic in this space.[^malfind]
 | **Structural** | Executable `MEM_PRIVATE` | +50 | no | T1055 | Unbacked executable memory, the core injection tell[^malfind] |
 | Structural | Executable `MEM_MAPPED` | +30 | no | T1055 | Possible **module stomping** (code written over a mapped file) |
 | Structural | Writable **and** executable (RWX/RWXC) | +25 | no | none | Self-modifying / stager memory; rare in benign code |
-| Structural | A thread starts in a committed, executable, non-image region (`THREAD_START_POINTS`) | +25 | no | T1055 | Code with a thread on it; every legitimate thread starts inside a mapped image |
+| **Thread** | A thread starts in a committed, executable, non-image region (`THREAD_START_POINTS`) | +25 | no | T1055 | Code with a thread on it; every legitimate thread starts inside a mapped image. Needs no bytes, but the memory map does not answer it either, which is why `MAP_SHAPE_RULES` excludes it |
 | **Content** | `MZ` header at offset 0 | +20 | yes | T1620 | PE image in memory → reflective DLL injection[^t1620] |
 | Content | NOP sled (≥ `NOP_SLED_MIN` = 16 × `0x90`) | +10 | yes | none | Classic shellcode landing zone |
 | Content | Shannon entropy ≥ `ENTROPY_PACKED` = 7.2 bits/byte | +10 | yes | T1027.002 | Packed or encrypted payload[^t1027] |
@@ -381,9 +381,16 @@ private, executable and writable; it cannot say whether a JIT compiler or a
 loader put it there, and on an ordinary desktop the compilers outnumber the
 loaders by every region there is. Reaching the top band takes a signal from
 somewhere the map cannot see: bytes that matched a content rule, a thread
-found starting in the region, or a change between two looks at it. Live mode
-reads the head of every executable region either way, so this is not about
-whether anything was read; it is about whether what came back said anything.
+found starting in the region, or a change between two looks at it. Where a
+head was read, that is a statement about the bytes: they came back and said
+nothing. Where none could be read it is not, and the difference matters.
+A target that denies `PROCESS_VM_READ`, which is any other user's process on
+an unelevated run, yields no heads at all, so no content or temporal rule
+can fire for any of its regions and **the top band is unreachable for that
+process**. The same holds replaying a recording made against one. That is a
+real limit rather than a quiet one: the region view says which of the two
+reasons held a row back, and the live header already says "(no read access,
+map only)" for the process as a whole.
 
 This is calibration, not a new heuristic, and it was measured before it was
 written. `private-exec` (50) plus `rwx` (25) is exactly 75, exactly
@@ -444,7 +451,9 @@ flowchart TD
     R -- no --> CAP["score = min(sum, 100)"]
     RI --> CAP
     RW --> CAP
-    CAP --> AL{"points left after excusing<br/>this image's allowlisted rules?"}
+    CAP --> ANY{"scored anything<br/>at all?"}
+    ANY -- no --> Z0["no band, no tint<br/>(most regions)"]
+    ANY -- yes --> AL{"points left after excusing<br/>this image's allowlisted rules?"}
     AL -- none --> ALW["band = allowlisted<br/>(score kept, tint neutral)"]
     AL -- some --> MS{"any point from outside<br/>the memory map?"}
     MS -- no --> RV["band = review at most<br/>(map shape alone)"]
@@ -683,7 +692,12 @@ commercial platform uses ([RESEARCH_NOTES.md](RESEARCH_NOTES.md) 7.1 and 7.3):
   thing an analyst reviewing a false positive needs to see.
 - **Scope it to one heuristic.** An entry names exactly one rule. Exempting a
   JIT host from `private-exec` and `rwx` leaves `pe-header`, `nop-sled` and the
-  rest counting, so a stomped CLR still reaches the review band on its content.
+  rest counting, so a stomped CLR still scores on its content and keeps its
+  row and its raw number. Note what that is worth: `pe-header` alone is 20
+  against a `REVIEW_SCORE` of 30, so an `MZ` in an excused host lands in
+  **low**, not review, and it takes a second content rule to ask for an
+  analyst's time. The entry cannot hide the row, but on one content signal it
+  does cost it a band.
 - **Make removal restore the verdict.** Nothing is recomputed or discarded, so
   deleting an entry brings the original band back with no history to replay.
   That falls out of the arithmetic rather than being a feature: a score is the
@@ -695,6 +709,12 @@ commercial platform uses ([RESEARCH_NOTES.md](RESEARCH_NOTES.md) 7.1 and 7.3):
 - **The header agrees with the bands.** The count of regions "rewritten while
   watching" comes from the verdicts rather than from the change set, so the
   header cannot announce a finding the allowlist has already excused.
+- **Both modes apply it.** `show_recorded_regions` takes the recorded process
+  name and looks it up exactly as the live view looks up the process it is
+  watching, so replaying a watch reaches the watch's verdict. Scoring a
+  recording differently from the session it came from would make the replay
+  contradict the thing it is a record of, which is the one property a
+  recording has to keep.
 
 Measured on this machine on 2026-09-08, unelevated, with entries for ten
 common JIT hosts on `private-exec` and `rwx` only: regions in the likely
@@ -730,11 +750,12 @@ observation nobody has vouched for.
   alone excuses anything that adopts it; an image path plus its publisher, or
   a head hash, is the intended upgrade. A PID is never a key, since Windows
   reuses those within minutes.
-- **Write it into the recording.** Entries live only in memory, so nothing
-  survives a restart and a replay elsewhere scores without them. Storing them
-  per recording is what would let a replay on another machine score the same
-  way and show a reader what was excluded, which is what makes a recording
-  evidence someone else can check.
+- **Write it into the recording.** Entries live only in memory. A replay in
+  the session that made them scores with them, since playback now looks them
+  up too, but nothing survives a restart and a replay on another machine has
+  none of them. Storing them per recording is what would let that replay
+  score the same way and show a reader what was excluded, which is what makes
+  a recording evidence someone else can check.
 - **An affordance to create one.** There is no UI to add or delete an entry
   yet; a caller builds the `Allowlist` and passes it to `RegionView`.
 

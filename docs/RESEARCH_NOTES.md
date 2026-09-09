@@ -643,9 +643,16 @@ asks for a signal from outside the memory map on top of `LIKELY_SCORE`
 
 **Allowlisting is audited and reversible. Refines.** Suppressing a verdict
 logs the override "for auditing purposes", emits a new Uninspected event, and
-removing the entry re-enables analysis [V, p. 447, p. 453]. Any Memlapse
-allowlist should be keyed on something durable (image path plus publisher, or
-head hash), written to the recording, and shown rather than applied silently.
+removing the entry re-enables analysis [V, p. 447, p. 453].
+**Shipped, in part.** Two of the three asks are in: the suppression is shown
+rather than silent (the row stays, the raw score stays, and the excused rule
+is marked "(allowlisted)" in the tooltip), and it is reversible with nothing
+to replay, since a score is the sum of its reasons and an excused rule is
+subtracted rather than erased. Playback applies the same entries as the live
+view, so a replay does not contradict the watch it records. What is missing
+is durability: the key is still an image name rather than an image path plus
+publisher or a head hash, entries are not written to the recording, and there
+is no audit log of who excused what and when.
 
 **Reputation of the backing image. New.** Reputation includes the publisher,
 whether the file is signed, the signing authority and a trust category, with
