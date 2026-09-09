@@ -668,3 +668,11 @@ def test_a_walk_that_lands_after_the_open_still_marks_the_timeline(main_window):
     win.timeline.set_marks([])
     win.playback.rewrites_ready.emit()          # as the pool thread would
     assert win.timeline.slider._marks == [1]
+
+
+def test_the_window_says_when_the_history_could_not_be_walked(main_window):
+    """An empty scrubber otherwise reads as a recording with no rewrites."""
+    win, db = main_window
+    win._open_recording(_seed_rewrite(db))
+    win.playback.history_failed.emit("disk went away")
+    assert "history unavailable" in win.statusBar().currentMessage().lower()

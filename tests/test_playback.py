@@ -803,3 +803,43 @@ def test_a_protection_flip_ends_the_spell_even_alone_in_the_map(tmp_db):
         assert engine.rewrites_at(2_000) == {EXEC_IDENTITY: [2_000]}
     finally:
         engine.close()
+
+
+def test_a_walk_that_cannot_run_says_so(tmp_db):
+    """Silence would be read as "this recording holds no rewrites".
+
+    That is a claim about the process. The truth would be that nobody
+    managed to look, and the two have to be told apart or an analyst reads a
+    failed scan as a clean one.
+    """
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        failures, walks = [], []
+        engine.history_failed.connect(failures.append)
+        engine.rewrites_ready.connect(lambda: walks.append(True))
+        engine.open(_rewrite_db(tmp_db, [(1_000, b"aaa")]))
+        walks.clear()
+        # A path no connection can be opened on, which is what a locked or
+        # deleted database looks like from the pool thread.
+        broken = playback_mod._HistoryWorker(
+            tmp_db + "/no/such/dir/x.db", 1, engine._sequence)
+        broken.signals.failed.connect(engine._history_gave_up)
+        broken.signals.done.connect(engine._history_walked)
+        broken.run()
+        assert len(failures) == 1 and failures[0]
+        assert walks == []
+    finally:
+        engine.close()
+
+
+def test_a_failure_from_a_walk_nobody_is_waiting_for_is_dropped(tmp_db):
+    """The staleness rule is the same for a failure as for an answer."""
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(_rewrite_db(tmp_db, [(1_000, b"aaa")]))
+        failures = []
+        engine.history_failed.connect(failures.append)
+        engine._history_gave_up(engine._sequence - 1, "from a recording since closed")
+        assert failures == []
+    finally:
+        engine.close()

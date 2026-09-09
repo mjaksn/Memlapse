@@ -277,6 +277,7 @@ class MainWindow(QMainWindow):
         # Connected before the open, never after: the walk is free to finish
         # inside open() and a listener attached afterwards would miss it.
         self.playback.rewrites_ready.connect(self._on_rewrites_ready)
+        self.playback.history_failed.connect(self._on_history_failed)
         times = self.playback.open(recording_id)
         self._mode = "playback"
         self.live_action.setEnabled(True)
@@ -308,6 +309,17 @@ class MainWindow(QMainWindow):
             {ts for stamps in self.playback.rewrites.values() for ts in stamps}))
         if self._playback_ts is not None:
             self._on_seek(self._playback_ts)
+
+    def _on_history_failed(self, message: str) -> None:
+        """Say the history is missing rather than letting it read as absent.
+
+        An empty scrubber is what a recording with no rewrites looks like, so
+        without this a failed walk would be indistinguishable from a quiet
+        process. The recording is still scrubbable; only the whole-run half
+        is gone.
+        """
+        self.statusBar().showMessage(
+            f"Rewrite history unavailable for this recording: {message}")
 
     def _on_seek(self, ts_us: int) -> None:
         if self._mode != "playback" or self.playback is None:

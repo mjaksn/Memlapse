@@ -138,6 +138,7 @@ class _HistoryWorker(QRunnable):
 
     class Signals(QObject):
         done = Signal(int, object)      # sequence, spells
+        failed = Signal(int, str)       # sequence, message
 
     def __init__(self, db_path, recording_id: int, sequence: int) -> None:
         super().__init__()
@@ -147,18 +148,30 @@ class _HistoryWorker(QRunnable):
         self._sequence = sequence
 
     def run(self) -> None:
-        conn = connect(self._db_path)
         try:
-            spells = walk_spells(Dao(conn), self._recording_id)
-        finally:
-            conn.close()
-        self.signals.done.emit(self._sequence, spells)
+            conn = connect(self._db_path)
+            try:
+                spells = walk_spells(Dao(conn), self._recording_id)
+            finally:
+                conn.close()
+        except Exception as exc:    # never let a pool thread die silently
+            # Saying nothing would be read as "this recording holds no
+            # rewrites", which is a claim about the process rather than about
+            # the walk. The live region loader answers the same way.
+            self.signals.failed.emit(self._sequence, str(exc))
+        else:
+            self.signals.done.emit(self._sequence, spells)
 
 
 class PlaybackEngine(QObject):
     #: Emitted when the whole-run walk lands, so the marks and the tooltips
     #: can be filled in. A recording is usable before this arrives.
     rewrites_ready = Signal()
+
+    #: Emitted instead when the walk could not finish. Without it an empty
+    #: `rewrites` would say "this recording holds no rewrites" when the truth
+    #: is that nobody managed to look.
+    history_failed = Signal(str)
 
     #: Looked up per engine so a test can substitute a pool that runs inline.
     pool_factory = staticmethod(_history_pool)
@@ -220,6 +233,7 @@ class PlaybackEngine(QObject):
         self._sequence += 1
         worker = _HistoryWorker(self._db_path, recording_id, self._sequence)
         worker.signals.done.connect(self._history_walked)
+        worker.signals.failed.connect(self._history_gave_up)
         self._pool.start(worker)
         self.allowlist = self._dao.allowlist_for(recording_id)
         return self.sample_times
@@ -375,6 +389,12 @@ class PlaybackEngine(QObject):
             for identity, runs in spells.items()
             if any(times for _, _, times in runs)}
         self.rewrites_ready.emit()
+
+    def _history_gave_up(self, sequence: int, message: str) -> None:
+        """A walk failed. Same staleness rule as a walk that succeeded."""
+        if sequence != self._sequence:
+            return
+        self.history_failed.emit(message)
 
     def close(self) -> None:
         # Anything still walking is now answering for a closed connection.
