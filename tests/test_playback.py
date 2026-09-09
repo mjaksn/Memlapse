@@ -2,7 +2,7 @@
 
 import pytest
 
-from memlapse.services import PlaybackEngine
+from memlapse.services import PlaybackEngine, describe_rewrites
 from memlapse.storage import connect
 from memlapse.storage.dao import Dao, ProcState
 
@@ -217,3 +217,165 @@ def test_unpacked_before_open_is_empty(seeded_db):
         assert engine.unpacked(1_000, {0x40000}) == set()
     finally:
         engine.close()
+
+
+# --- rewrite_history(): what the whole recording knows ----------------------
+def _rewrite_db(tmp_db, heads_by_ts, region=None):
+    """Record one executable region with the given head at each timestamp."""
+    region = region or Region(0x10000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ,
+                              MEM_PRIVATE)
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    for ts, head in heads_by_ts:
+        dao.add_sample(rid, ts, ProcState(ts, 1000, 1, 1, 1), [region],
+                       None if head is None else {region.base_addr: head})
+    conn.close()
+    return rid
+
+
+def test_rewrite_history_is_the_per_sample_flags_gathered(tmp_db):
+    """The history and the flags have to be the same detector.
+
+    They are reached by different routes: :meth:`rewritten` anchors one sample
+    and reads its regions and hashes through two queries with their own MAX
+    subqueries, while the history walks every row once and groups them. Two
+    routes to one answer is worth an assertion, because the tooltip that
+    reports the count sits beside the flag that reports the moment, and an
+    analyst who scrubs to the time the tooltip names has to find the flag
+    there. The expectation is built from the other route rather than written
+    out, so this fails if either route drifts from the other.
+    """
+    rid = _rewrite_db(tmp_db, [(1_000, b"aaa"), (2_000, b"bbb"),
+                               (3_000, b"bbb"), (4_000, b"ccc")])
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        by_sample: dict[int, list[int]] = {}
+        for ts in engine.sample_times:
+            for base in engine.rewritten(ts):
+                by_sample.setdefault(base, []).append(ts)
+        assert by_sample == {0x10000: [2_000, 4_000]}   # the route being checked
+        assert engine.rewrite_history(rid) == by_sample
+    finally:
+        engine.close()
+
+
+def test_open_computes_the_history_once(tmp_db):
+    """``rewrites`` is filled by open, and by nothing else.
+
+    Playback reads it on the GUI thread for every tooltip, so it has to be
+    the pass that already ran rather than a query per row.
+    """
+    rid = _rewrite_db(tmp_db, [(1_000, b"aaa"), (2_000, b"bbb")])
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        assert engine.rewrites == {}          # nothing open yet
+        engine.open(rid)
+        assert engine.rewrites == {0x10000: [2_000]}
+        engine.open(rid + 999)                # an id with no rows
+        assert engine.rewrites == {}          # and no leftovers from the last
+    finally:
+        engine.close()
+
+
+def test_rewrite_history_orders_the_times_and_omits_the_quiet(tmp_db):
+    """Two regions, one rewritten twice and one never touched."""
+    quiet = Region(0x20000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    loud = Region(0x10000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    for ts, head in ((1_000, b"aaa"), (2_000, b"bbb"), (3_000, b"ccc")):
+        dao.add_sample(rid, ts, ProcState(ts, 1000, 1, 1, 1), [loud, quiet],
+                       {0x10000: head, 0x20000: b"same"})
+    conn.close()
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.rewrites == {0x10000: [2_000, 3_000]}
+    finally:
+        engine.close()
+
+
+def test_rewrite_history_needs_a_head_on_both_sides(tmp_db):
+    """A sample that captured no head cannot show a change, either way.
+
+    A missing head means the comparison could not be made, which is the same
+    allowance :meth:`rewritten` makes and the reason a recording of a process
+    that denied reads reports no rewrites rather than reporting them all.
+    """
+    rid = _rewrite_db(tmp_db, [(1_000, None), (2_000, b"bbb"), (3_000, None),
+                               (4_000, b"ddd")])
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.rewrites == {}
+    finally:
+        engine.close()
+
+
+def test_rewrite_history_will_not_join_a_region_across_a_sample_it_missed(tmp_db):
+    """A region that left the map and came back was not rewritten in place.
+
+    It is a new allocation carrying whatever it carries, which is the
+    allocation signal's business and not this one's. The pass has to compare
+    consecutive samples rather than consecutive rows for one address, and the
+    difference only shows when something else keeps the middle sample alive:
+    with the region simply absent from every row of that tick there would be
+    no sample there at all. So a second region stays throughout, and the
+    per-sample detector is asked the same question as a witness.
+    """
+    gone = Region(0x10000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    stays = Region(0x20000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 1, 1, 1), [gone, stays],
+                   {0x10000: b"aaa", 0x20000: b"same"})
+    dao.add_sample(rid, 2_000, ProcState(2_000, 1000, 1, 1, 1), [stays],
+                   {0x20000: b"same"})
+    dao.add_sample(rid, 3_000, ProcState(3_000, 1000, 1, 1, 1), [gone, stays],
+                   {0x10000: b"zzz", 0x20000: b"same"})
+    conn.close()
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.rewritten(3_000) == set()   # the flag agrees
+        assert engine.rewrites == {}
+    finally:
+        engine.close()
+
+
+def test_rewrite_history_of_a_recording_with_no_samples_is_empty(seeded_db):
+    db, rid = seeded_db
+    engine = PlaybackEngine(db_path=db)
+    try:
+        assert engine.rewrite_history(rid + 999) == {}
+    finally:
+        engine.close()
+
+
+# --- the line the tooltip shows --------------------------------------------
+def test_describe_rewrites_says_nothing_about_nothing():
+    assert describe_rewrites([], 0) == ""
+
+
+def test_describe_rewrites_counts_and_clocks():
+    origin = 1_000_000_000
+    assert (describe_rewrites([origin + 251_000_000], origin)
+            == "rewritten once in this recording, at 00:04:11")
+    assert (describe_rewrites([origin, origin + 60_000_000,
+                               origin + 251_900_000], origin)
+            == "rewritten 3 times in this recording, most recently at 00:04:11")
+
+
+def test_describe_rewrites_carries_past_an_hour():
+    """A long recording still reads as a clock, and the seconds truncate.
+
+    Truncating is what puts the reader on the sample: a rewrite 11.9 seconds
+    into the minute belongs to the sample at 11 seconds, and rounding up would
+    name a second the timeline has nothing at.
+    """
+    assert (describe_rewrites([3_671_900_000], 0)
+            == "rewritten once in this recording, at 01:01:11")

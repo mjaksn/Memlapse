@@ -21,7 +21,9 @@ the readers fall back to it.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from dataclasses import dataclass
+from itertools import groupby
 
 from ..analytics import head_hash
 from ..model.region import Region
@@ -188,6 +190,37 @@ class Dao:
                 changed.append(ts)
             previous = created
         return changed
+
+    def region_samples(
+        self, recording_id: int
+    ) -> Iterator[tuple[int, list[Region], dict[int, bytes]]]:
+        """Every region sample of a recording in order, with its head hashes.
+
+        Yields ``(ts_us, regions, digests)`` per sample, which is what a pass
+        over a whole recording wants: the anchored reads below answer for one
+        moment each, so walking a recording through them costs two queries
+        and two MAX subqueries per sample, where this costs one query for the
+        lot. Rows with no hash are left out of ``digests`` exactly as
+        :meth:`head_hashes_at` leaves them out, so a row from before hashes
+        were stored reads as "cannot tell" rather than as a change.
+
+        A generator on purpose: the caller holds two samples at a time
+        (see :meth:`PlaybackEngine.rewrite_history`), never the recording.
+        """
+        rows = self.conn.execute(
+            "SELECT ts_us, base_addr, size, state, protect, type, head_hash "
+            "FROM region_snapshot WHERE recording_id=? ORDER BY ts_us, base_addr",
+            (recording_id,),
+        )
+        for ts_us, sample in groupby(rows, key=lambda row: row[0]):
+            regions: list[Region] = []
+            digests: dict[int, bytes] = {}
+            for _, base, size, state, protect, type_, digest in sample:
+                regions.append(Region(base_addr=base, size=size, state=state,
+                                      protect=protect, type=type_))
+                if digest is not None:
+                    digests[base] = bytes(digest)
+            yield ts_us, regions, digests
 
     def sample_at(self, recording_id: int, ts_us: int) -> int | None:
         """Timestamp of the region sample at or before ts_us, or None.
