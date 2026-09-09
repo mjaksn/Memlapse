@@ -632,10 +632,14 @@ region scorer is the cheap version of this.
 enable toggle, a "Likelihood (Threshold)" slider ("For a detection that falls
 below the threshold, the system discards the suspicious traffic event") and
 its own exclusion lists, with a distinction between static lists and groups
-evaluated at run time [V, p. 411 to 417]. Memlapse has one global pair of
-thresholds. Per-heuristic thresholds, and exclusions that can be a predicate
-(image name pattern, signer) rather than a PID, would let a user exempt the
-CLR from the private-executable rule without exempting it from the `MZ` rule.
+evaluated at run time [V, p. 411 to 417].
+**Shipped, in part.** The per-heuristic exclusion is the JIT allowlist: an
+entry names one rule id, so exempting a host from `private-exec` and `rwx`
+leaves the `MZ` rule counting, which is exactly the case described here. The
+key is still an image name rather than a predicate over the signer, and the
+thresholds themselves are still one global pair, though the top band now
+asks for a signal from outside the memory map on top of `LIKELY_SCORE`
+(ARCHITECTURE.md). Per-heuristic thresholds remain unbuilt.
 
 **Allowlisting is audited and reversible. Refines.** Suppressing a verdict
 logs the override "for auditing purposes", emits a new Uninspected event, and

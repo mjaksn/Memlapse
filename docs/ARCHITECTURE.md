@@ -351,22 +351,27 @@ Supporting helpers, all pure and unit-tested (`tests/test_analytics.py`):
 - `shannon_entropy(data)`, `H = -Σ pᵢ·log₂ pᵢ`, in bits/byte (0.0 to 8.0).[^entropy]
 - `longest_nop_run(data)`, longest run of `0x90`.
 
-Every scored region falls in one of three bands (tune them against a
-JIT-heavy baseline, see Limitations), and the band leads the tooltip because
-a bare number does not tell an analyst what to do with it:
+Every scored region falls in one of four bands, and the band leads the
+tooltip because a bare number does not tell an analyst what to do with it.
+The top edge was tuned against a JIT-heavy baseline on 2026-09-08 and the
+survey is below; the lower edge still rests on the reading in
+RESEARCH_NOTES.md 7.1 rather than on a measurement of this machine:
 
 | Band | Score | What it means |
 |---|---:|---|
 | low | 1 to 29 | Something tripped, not enough to spend time on. Shown and tinted all the same. |
 | review | `REVIEW_SCORE` = 30 to 74 | Worth a second look. Most JIT and EDR artefacts land here. |
 | likely injection | `LIKELY_SCORE` = 75 and above, **and at least one point from outside the map** | Act on it. |
+| allowlisted | any, once an entry excuses every rule that fired | Someone has vouched for this. The row and the score stay; see [the allowlist](#shipped-allowlist-semantics). |
 
 The lower edge is 30 rather than 50 on the reasoning in RESEARCH_NOTES.md
 7.1: a commercial platform treats 30 as the point where a detection is worth
 forwarding, and a band that starts at 50 leaves the single-signal findings
-between them looking identical to noise. Three bands cost nothing on an
-additive scale that already exists, and the lowest band is where an analyst
-learns what their own machine looks like.
+between them looking identical to noise. Splitting the scale three ways costs
+nothing on an additive score that already exists, and the lowest band is
+where an analyst learns what their own machine looks like. The fourth band
+is not a threshold at all: `allowlisted` is what a region gets when an entry
+excuses everything that fired, and it cuts across the other three.
 
 The top edge takes one thing more than the points. `MAP_SHAPE_RULES` names
 the three a single `VirtualQueryEx` answers on its own, `private-exec`,
@@ -375,19 +380,21 @@ the three a single `VirtualQueryEx` answers on its own, `private-exec`,
 private, executable and writable; it cannot say whether a JIT compiler or a
 loader put it there, and on an ordinary desktop the compilers outnumber the
 loaders by every region there is. Reaching the top band takes a signal from
-somewhere the map cannot see: bytes that were read, a thread found starting
-in the region, or a change between two looks at it.
+somewhere the map cannot see: bytes that matched a content rule, a thread
+found starting in the region, or a change between two looks at it. Live mode
+reads the head of every executable region either way, so this is not about
+whether anything was read; it is about whether what came back said anything.
 
 This is calibration, not a new heuristic, and it was measured before it was
 written. `private-exec` (50) plus `rwx` (25) is exactly 75, exactly
 `LIKELY_SCORE`, so that pair alone used to top the scale. Enumerating every
 rule set a region can actually produce, it is the only one that reached the
 top band without a second kind of evidence. Surveyed unelevated on this
-machine on 2026-09-08, across 141 readable processes and 208,183 regions of
-which 1,065 scored at all, it was also the only one that did: all 439
-regions in the top band scored on `private-exec + rwx` and nothing else. The
-rule moves every one of them to review and leaves the other 626 scoring
-regions exactly where they were.
+machine on 2026-09-08, across 130 readable processes and 203,388 regions of
+which 956 scored at all, it was also the only one that did: all 343 regions
+in the top band scored on `private-exec + rwx` and nothing else. The rule
+moves every one of them to review and leaves the other 613 scoring regions
+exactly where they were.
 
 The alternatives were weighed against the same enumeration and rejected.
 Raising `LIKELY_SCORE` to 80 drops 18 rule sets out of the top band, among
@@ -398,9 +405,9 @@ stomping that carries a PE header. Asking for one point from outside the map
 drops exactly one, the pair itself, and nothing else at all.
 
 The table can now show a 75 in the review band, which reads as a bug unless
-the row accounts for it, so a held-back region says so in its tooltip: `held
-at review: the memory map is the whole case, which is also what a JIT
-compiler leaves`. The note appears only where the number and the band
+the row accounts for it, so a held-back region says so in its tooltip:
+`held at review: nothing here but the shape of the map, which is what a JIT
+compiler leaves too`. The note appears only where the number and the band
 disagree, never on a region that simply scored too little.
 
 ```mermaid
@@ -699,20 +706,22 @@ running; the before and after come from the same survey.
 
 That measurement predates the band rule above and is left as it stands,
 since it is what the allowlist does on its own. The two now divide the work,
-and the survey in the scoring section shows how. Of the 439 regions the band
-rule moves out of the top band, the allowlist goes on to quiet 377
+and the survey in the scoring section shows how. Of the 343 regions the band
+rule moves out of the top band, the allowlist goes on to quiet 281
 completely, into `allowlisted`; the remaining 62 stay in review, because
 they belong to processes nobody put on the list. The allowlist also reaches
-65 regions the band rule never touched, which were in review all along, for
-442 allowlisted in total.
+61 regions the band rule never touched, which were in review all along, for
+342 allowlisted in total.
 
 Neither subsumes the other, and the reason is worth keeping in view. The
 band rule needs no list, so it is the half that covers a host nobody thought
-to name, and on that survey it was the only thing standing between
-`cef_server.exe` and a top-band verdict. The allowlist is the half that can
-quiet a row completely, which the band rule will not do, because a JIT arena
-really is private executable memory and review is an honest place to leave
-an observation nobody has vouched for.
+to name. On that survey those 62 regions belonged to four processes none of
+the ten entries mention, `SourceTree.exe` and a Lenovo service accounting
+for 60 of them, and the band rule is the only thing that kept any of them
+out of the top band. The allowlist is the half that can quiet a row
+completely, which the band rule will not do, because a JIT arena really is
+private executable memory and review is an honest place to leave an
+observation nobody has vouched for.
 
 ### Planned: the rest of the allowlist
 

@@ -172,8 +172,8 @@ class RegionTableModel(QAbstractTableModel):
                 # which looks like a bug unless the row says why.
                 if (verdict.map_shape_only
                         and verdict.effective_score >= LIKELY_SCORE):
-                    tip += ("; held at review: the memory map is the whole "
-                            "case, which is also what a JIT compiler leaves")
+                    tip += ("; held at review: nothing here but the shape of "
+                            "the map, which is what a JIT compiler leaves too")
                 return tip
         return None
 

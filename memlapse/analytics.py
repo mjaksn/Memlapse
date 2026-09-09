@@ -349,9 +349,11 @@ class RegionVerdict:
     def map_shape_only(self) -> bool:
         """Every rule still counting came from the memory map alone.
 
-        True for a region whose whole case is its type and its protection:
-        nothing was read from it, no thread was found starting in it, and it
-        did not change between two looks. See :data:`MAP_SHAPE_RULES`.
+        True for a region whose whole case is its type and its protection.
+        Live mode reads the head of every executable region, so this does not
+        mean nothing was read: it means nothing that was read matched a
+        content rule, no thread was found starting here, and the bytes did
+        not change between two looks. See :data:`MAP_SHAPE_RULES`.
         """
         counting = {r.rule for r in self.reasons if not r.allowed}
         return bool(counting) and counting <= MAP_SHAPE_RULES
@@ -373,8 +375,8 @@ class RegionVerdict:
         it clears :data:`LIKELY_SCORE`, because the map alone cannot tell a
         JIT arena from a payload: both are private, both are executable, and
         a great many of the first exist on an ordinary machine. Reaching
-        "likely injection" takes a signal from somewhere else, which means
-        bytes that were read, a thread found starting in the region, or a
+        "likely injection" takes a signal from somewhere else: bytes that
+        matched a content rule, a thread found starting in the region, or a
         change between two looks at it. Measured on this machine on
         2026-09-08, that is the whole of the difference: every region in the
         top band scored on nothing but private plus RWX.
@@ -441,6 +443,10 @@ def score_region(region: Region, *, head: bytes = b"",
     if region.protect & _WRITE_EXEC:
         fired(RULE_RWX, 25, "writable + executable (RWX)")
 
+    # Not structural, whatever its place in this function: the map does not
+    # answer it, and a thread executing in unbacked memory is the one
+    # single-snapshot signal strong enough to reach the top band on its own
+    # (see MAP_SHAPE_RULES).
     if thread_start and region.type != MEM_IMAGE:
         fired(RULE_THREAD_START, THREAD_START_POINTS,
               f"a thread starts here, in memory no image backs "
