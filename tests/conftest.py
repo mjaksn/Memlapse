@@ -60,12 +60,13 @@ class FakeSampler(QObject):
 
     instances: list["FakeSampler"] = []
 
-    def __init__(self, pid, name, interval, db_path=None):
+    def __init__(self, pid, name, interval, db_path=None, allowlist=None):
         super().__init__()
         self.pid = pid
         self.name = name
         self.interval = interval
         self.db_path = db_path
+        self.allowlist = allowlist
         self._running = False
         FakeSampler.instances.append(self)
 

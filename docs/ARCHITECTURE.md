@@ -120,7 +120,8 @@ Two more rules keep the GUI thread responsive, both learned the hard way:
 ## Data model sketch (SQLite)
 
 ```sql
-recording(id, target_pid, target_name, started_utc, ended_utc, note)
+recording(id, target_pid, target_name, started_utc, ended_utc, note, allowlist_recorded)
+recording_allowlist(id, recording_id, image_name, rule, note)  -- the allowlist the recording was made under
 process_snapshot(id, recording_id, ts_us, pid, wset_bytes, priv_bytes, thread_count, can_read, created_ft)
 thread(id, recording_id, tid, pid, start_ts, symbol_hint)
 thread_snapshot(id, recording_id, ts_us, tid, start_addr)  -- Win32 thread start addresses, per sample
@@ -906,6 +907,37 @@ completely, which the band rule will not do, because a JIT arena really is
 private executable memory and review is an honest place to leave an
 observation nobody has vouched for.
 
+### Shipped: the allowlist travels with the recording
+
+`create_recording` writes the entries in force into `recording_allowlist`,
+and a replay scores with those rather than with whatever the reader has
+configured. Open a recording on another machine and the same rules are
+excused, which is what makes it a finding someone else can check rather than
+one that depends on the reviewer's own setup.
+
+The read is `Dao.allowlist_for`, and it answers three states, not two:
+
+- **An allowlist with entries.** The recording says what it excused, and the
+  replay excuses exactly that.
+- **An allowlist with no entries.** The recording says it excused nothing,
+  and the replay excuses nothing. This is a real answer.
+- **None.** Nobody wrote a list down, which is every recording made before
+  the column existed. Only then does the currently configured allowlist
+  score the replay, which is how every replay behaved before this shipped,
+  so no existing recording changes its bands. The playback header says so
+  when it makes a difference.
+
+The last two are the same zero rows in `recording_allowlist` and opposite
+instructions, which is why `recording.allowlist_recorded` carries the flag.
+It is the same rule as `can_read`: NULL means "not recorded", never false.
+
+That distinction has a sharp edge in code. `Allowlist.__bool__` reports
+whether it holds entries, so a recorded allowlist that excused nothing is
+falsy while still being the answer. Every choice between a recorded list and
+the configured one is written `is None`, never as `or`; written as `or`, a
+recording that excused nothing would silently be scored with the reader's
+list instead.
+
 ### Planned: the rest of the allowlist
 
 - **A durable key.** Entries are keyed on the process image name, which the
@@ -913,14 +945,11 @@ observation nobody has vouched for.
   alone excuses anything that adopts it; an image path plus its publisher, or
   a head hash, is the intended upgrade. A PID is never a key, since Windows
   reuses those within minutes.
-- **Write it into the recording.** Entries live only in memory. A replay in
-  the session that made them scores with them, since playback now looks them
-  up too, but nothing survives a restart and a replay on another machine has
-  none of them. Storing them per recording is what would let that replay
-  score the same way and show a reader what was excluded, which is what makes
-  a recording evidence someone else can check.
 - **An affordance to create one.** There is no UI to add or delete an entry
-  yet; a caller builds the `Allowlist` and passes it to `RegionView`.
+  yet. `MainWindow` owns the one `Allowlist` that the live view scores
+  against and that a recording writes down, so an editor has one place to
+  write to, but until it exists a recording made by the app stores an
+  allowlist with no entries in it.
 
 ### References
 

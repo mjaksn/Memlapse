@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QToolBar, QToolButton,
 )
 
+from ..analytics import Allowlist
 from ..collectors import ProcessCollector, SystemCollector
 from ..model import ProcessInfo
 from ..services import PlaybackEngine, RecordingManager
@@ -57,9 +58,17 @@ class MainWindow(QMainWindow):
         self._process_count = 0
         self._dropped = {"process": 0, "system": 0}
 
+        #: The rules excused for each process, as configured now. The window
+        #: owns it because two things need the same one: the live view scores
+        #: against it, and a recording writes it down so a replay elsewhere
+        #: excuses what this session excused. Empty until there is a way to
+        #: add an entry (ARCHITECTURE.md, "Planned: the rest of the
+        #: allowlist"), so a recording made today stores an empty list.
+        self.allowlist = Allowlist()
+
         # --- central layout ------------------------------------------------
         self.process_view = ProcessView(self)
-        self.region_view = RegionView(self)
+        self.region_view = RegionView(self, allowlist=self.allowlist)
         splitter = QSplitter(Qt.Horizontal, self)
         splitter.addWidget(self.process_view)
         splitter.addWidget(self.region_view)
@@ -218,7 +227,8 @@ class MainWindow(QMainWindow):
             return
         if self._selected_pid is None:
             return
-        self.recorder.start(self._selected_pid, self._selected_name)
+        self.recorder.start(self._selected_pid, self._selected_name,
+                            allowlist=self.allowlist)
 
     def _on_recording_started(self, recording_id: int) -> None:
         self.record_action.setText("■ Stop")
@@ -303,7 +313,17 @@ class MainWindow(QMainWindow):
             header = f"Recording #{self.playback.recording_id}, no data at this time"
         self.region_view.show_recorded_regions(regions, header, heads, rewritten,
                                                thread_starts, unpacked,
-                                               self.playback.target_name)
+                                               self.playback.target_name,
+                                               self.playback.allowlist)
+        # Only after the rows are scored, because the question is not whether
+        # this machine has an allowlist but whether it excused something here.
+        # An entry for another process, or one for a rule that did not fire in
+        # this sample, changes no band, and a notice about it would send an
+        # analyst looking for an influence that is not there.
+        if (self.playback.allowlist is None
+                and self.region_view.model.excused_anything):
+            self.region_view.header.setText(
+                header + "  (no allowlist recorded, scored with the current one)")
 
     # --- shutdown ---------------------------------------------------------
     def closeEvent(self, event) -> None:

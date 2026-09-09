@@ -9,9 +9,13 @@ from memlapse.services.recording import DEFAULT_INTERVAL, _default_factory
 
 
 def test_default_factory_builds_region_sampler(qapp):
-    sampler = _default_factory(1234, "proc.exe", 0.5, None)
+    from memlapse.analytics import Allowlist, AllowlistEntry, RULE_RWX
+    book = Allowlist([AllowlistEntry("jit.exe", RULE_RWX, "JIT host")])
+    sampler = _default_factory(1234, "proc.exe", 0.5, None, book)
     assert isinstance(sampler, RegionSampler)
     assert sampler.pid == 1234 and sampler.interval == 0.5
+    # The real factory has to carry it too, or only the fakes would.
+    assert sampler.allowlist is book
 
 
 def test_start_creates_sampler_and_reemits(qapp, fake_sampler_cls):
@@ -82,9 +86,10 @@ class _QThreadLikeSampler(QObject):
 
     instances: list["_QThreadLikeSampler"] = []
 
-    def __init__(self, pid, name, interval, db_path=None):
+    def __init__(self, pid, name, interval, db_path=None, allowlist=None):
         super().__init__()
         self.pid, self.name, self.interval, self.db_path = pid, name, interval, db_path
+        self.allowlist = allowlist
         self._running = False
         self.stop_calls = 0
         self.wait_calls = 0
@@ -159,3 +164,18 @@ def test_finish_signal_clears_active_sampler(qapp, fake_sampler_cls):
 
     assert reasons == ["target process exited"]
     assert mgr.is_recording is False
+
+
+def test_start_passes_the_allowlist_to_the_sampler(qapp, fake_sampler_cls):
+    from memlapse.analytics import Allowlist, AllowlistEntry, RULE_RWX
+    book = Allowlist([AllowlistEntry("jit.exe", RULE_RWX, "JIT host")])
+    mgr = RecordingManager(sampler_factory=fake_sampler_cls)
+    mgr.start(1234, "jit.exe", allowlist=book)
+    assert fake_sampler_cls.instances[0].allowlist is book
+
+
+def test_start_without_an_allowlist_passes_none(qapp, fake_sampler_cls):
+    """None and an empty Allowlist are different instructions to the replay."""
+    mgr = RecordingManager(sampler_factory=fake_sampler_cls)
+    mgr.start(1234, "jit.exe")
+    assert fake_sampler_cls.instances[0].allowlist is None

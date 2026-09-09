@@ -105,6 +105,14 @@ def test_connect_migrates_old_database(tmp_db):
         state = dao.state_at(1, 1000)
         assert state.can_read is None and state.created_ft is None
         assert dao.instance_changes(1) == []
+        # Same treatment for the allowlist: the column and the table arrive
+        # on this open, and the old recording answers None, meaning nobody
+        # wrote a list down. Read as an empty allowlist it would claim the
+        # recording excused nothing, which it never said.
+        rec_columns = {r[1] for r in conn.execute("PRAGMA table_info(recording)")}
+        assert "allowlist_recorded" in rec_columns
+        assert "recording_allowlist" in tables
+        assert dao.allowlist_for(1) is None
     finally:
         conn.close()
 
@@ -118,6 +126,8 @@ def test_connect_twice_after_migration_is_quiet(tmp_db):
         assert columns.count("head_hash") == 1
         proc = [r[1] for r in conn.execute("PRAGMA table_info(process_snapshot)")]
         assert proc.count("can_read") == 1 and proc.count("created_ft") == 1
+        rec = [r[1] for r in conn.execute("PRAGMA table_info(recording)")]
+        assert rec.count("allowlist_recorded") == 1
     finally:
         conn.close()
 

@@ -61,7 +61,7 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 385 passed with 100 percent line and branch
+(2026-09-06); the test run is 404 passed with 100 percent line and branch
 coverage (2026-09-09).
 
 ## Conventions
@@ -147,11 +147,20 @@ coverage (2026-09-09).
   sticky rewrite flag, is a stand-in for having no timeline to scrub. Read
   `docs/ARCHITECTURE.md`, "A band is about a moment", before changing anything
   that makes the two modes score differently.
+- `Allowlist.__bool__` says whether it holds entries, which is not whether
+  it was recorded. A recording that excused nothing gives an allowlist that
+  is falsy and still governs its replay, so every choice between a recorded
+  allowlist and the configured one is written `is None`. Written as `or`, a
+  recording that excused nothing is silently scored with the reader's own
+  list, and the bands then depend on who opened the file.
 - Some facts have to be recorded because no later pass can recover them:
   `process_snapshot.can_read` and `.created_ft` are properties of the sample,
   not of the process. Both are nullable and NULL means "not recorded", which
   is not false and not zero; an older recording answers "nobody asked", and
-  reporting that as a denial is a bug.
+  reporting that as a denial is a bug. `recording.allowlist_recorded` is the
+  third of these: zero rows in `recording_allowlist` mean "excused nothing"
+  when it is set and "nobody wrote a list down" when it is NULL, and those
+  score differently.
 - Recordings are stored per user under `%LOCALAPPDATA%\Memlapse\memlapse.db`. Recordings
   made under the old name live in a `MemDo` folder beside it and are not picked up.
 - `git grep -P` handles Unicode escapes; plain `grep -P` on this machine does not, and
