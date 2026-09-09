@@ -17,10 +17,10 @@ from memlapse.storage.dao import Dao, ProcState
 from conftest import FakeCollector, FakeSampler
 
 
-def _seed(db_path, *, with_samples=True, sample_regions=None):
+def _seed(db_path, *, with_samples=True, sample_regions=None, allowlist=None):
     conn = connect(db_path)
     dao = Dao(conn)
-    rid = dao.create_recording(1000, "proc.exe", 1_000)
+    rid = dao.create_recording(1000, "proc.exe", 1_000, allowlist=allowlist)
     if with_samples:
         dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 100, 50, 3), sample_regions)
         dao.add_sample(rid, 2_000, ProcState(2_000, 1000, 200, 60, 4), sample_regions)
@@ -482,3 +482,105 @@ def test_playback_header_flags_a_pid_reused_mid_recording(main_window):
     assert "pid reused" not in win.region_view.header.text()   # before the change
     win._on_seek(2_000)
     assert "pid reused during this recording" in win.region_view.header.text()
+
+
+# --- which allowlist scores a replay ---------------------------------------
+# The recording's own, when it wrote one down. Everything below turns on the
+# difference between "no list was recorded" and "a list was recorded and it
+# was empty", which are the same zero rows and opposite instructions.
+
+
+def _rwx_region():
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READWRITE, Region)
+    # private + committed + executable fires private-exec (50) and rwx (25).
+    return Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
+
+
+def _excusing(*rules):
+    from memlapse.analytics import Allowlist, AllowlistEntry
+    return Allowlist([AllowlistEntry("proc.exe", r, "JIT host") for r in rules])
+
+
+def _replay(win, db, *, recorded, current):
+    win.allowlist = current
+    win.region_view._allowlist = current
+    rid = _seed(db, sample_regions=[_rwx_region()], allowlist=recorded)
+    win._open_recording(rid)
+    win._on_seek(2_000)
+    return win.region_view.model._verdicts[0]
+
+
+def test_a_replay_scores_with_the_recorded_allowlist_not_the_current_one(main_window):
+    """The discriminating fixture: the two lists excuse opposite rules.
+
+    Record under private-exec, replay on a machine configured for rwx. If the
+    replay took the current list the excused rule would be rwx and the score
+    50; the recording says private-exec and 25. Scoring the recording's way is
+    what lets someone else open it and reach the finding this session reached.
+    """
+    from memlapse.analytics import RULE_PRIVATE_EXEC, RULE_RWX
+    win, db = main_window
+    verdict = _replay(win, db, recorded=_excusing(RULE_PRIVATE_EXEC),
+                      current=_excusing(RULE_RWX))
+    assert {r.rule for r in verdict.reasons if r.allowed} == {RULE_PRIVATE_EXEC}
+    assert verdict.effective_score == 25
+    assert verdict.score == 75  # the raw number is never suppressed
+
+
+def test_a_recorded_empty_allowlist_beats_a_configured_one(main_window):
+    """Falsy, and still the answer.
+
+    Zero recorded entries with the flag set says this session excused
+    nothing. Reading that for truth rather than for None hands the replay
+    back to whatever this machine has configured, which would silently
+    excuse a rule the recording never excused.
+    """
+    from memlapse.analytics import Allowlist, RULE_RWX
+    win, db = main_window
+    verdict = _replay(win, db, recorded=Allowlist(), current=_excusing(RULE_RWX))
+    assert [r.rule for r in verdict.reasons if r.allowed] == []
+    assert verdict.effective_score == 75
+
+
+def test_a_recording_with_no_allowlist_falls_back_to_the_current_one(main_window):
+    """No regression for every recording made before this was stored."""
+    from memlapse.analytics import RULE_RWX
+    win, db = main_window
+    verdict = _replay(win, db, recorded=None, current=_excusing(RULE_RWX))
+    assert {r.rule for r in verdict.reasons if r.allowed} == {RULE_RWX}
+    assert verdict.effective_score == 50
+
+
+def test_the_header_says_when_the_current_allowlist_did_the_scoring(main_window):
+    """Because then the bands owe something to this machine, not the recording."""
+    from memlapse.analytics import RULE_RWX
+    win, db = main_window
+    _replay(win, db, recorded=None, current=_excusing(RULE_RWX))
+    assert "no allowlist recorded" in win.region_view.header.text()
+
+
+def test_the_header_stays_quiet_when_the_fallback_changes_nothing(main_window):
+    """An empty current list excuses nothing either way, so there is no news."""
+    from memlapse.analytics import Allowlist
+    win, db = main_window
+    _replay(win, db, recorded=None, current=Allowlist())
+    assert "no allowlist recorded" not in win.region_view.header.text()
+
+
+def test_the_header_stays_quiet_when_the_recording_brought_its_own(main_window):
+    from memlapse.analytics import Allowlist, RULE_RWX
+    win, db = main_window
+    _replay(win, db, recorded=Allowlist(), current=_excusing(RULE_RWX))
+    assert "no allowlist recorded" not in win.region_view.header.text()
+
+
+def test_recording_is_started_with_the_windows_allowlist(main_window):
+    """One list, two consumers: the live view scores with it and the
+    recording writes it down. Two objects here would let a replay disagree
+    with the watch that made it."""
+    win, _ = main_window
+    win._selected_pid, win._selected_name = 4242, "proc.exe"
+    win._toggle_record()
+    assert FakeSampler.instances[-1].allowlist is win.allowlist
+    assert win.region_view._allowlist is win.allowlist
