@@ -273,6 +273,13 @@ def _exec_private(base=0x40000):
     return Region(base, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
 
 
+def _exec_private_rwx(base=0x40000):
+    """50 + 25 = 75 on the map alone, which is where the band rule bites."""
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READWRITE, Region)
+    return Region(base, 4096, MEM_COMMIT, PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
+
+
 def test_region_model_rewritten_adds_points(rmodel):
     from PySide6.QtCore import Qt
     rmodel.set_regions([_exec_private()], None, {0x40000})
@@ -810,6 +817,40 @@ def test_watching_another_process_compares_it_with_itself(qtbot, live_view):
     _wait_load(qtbot, v)
     assert "has exited" not in v.header.text()
     assert v._created == 9999
+
+
+# --- a held-back row says why ------------------------------------------------
+def test_a_row_held_back_by_the_band_rule_says_so(rmodel):
+    """The Score column shows 75 and the band says review. Explain that."""
+    from PySide6.QtCore import Qt
+    region = _exec_private_rwx()
+    rmodel.set_regions([region], None)
+    assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == "75"
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert tip.startswith("review: ")
+    assert "held at review" in tip
+
+
+def test_a_row_that_earned_its_band_says_nothing_extra(rmodel):
+    """The note belongs only where the number and the band disagree."""
+    from PySide6.QtCore import Qt
+    region = _exec_private_rwx()
+    heads = {region.base_addr: b"MZ"}
+    rmodel.set_regions([region], heads)
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert tip.startswith("likely injection: ")
+    assert "held at review" not in tip
+
+
+def test_a_low_scoring_shape_only_row_says_nothing_extra(rmodel):
+    """Nothing was held back from a region that never reached the top."""
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import MEM_COMMIT, MEM_MAPPED, PAGE_EXECUTE_READ, Region
+    region = Region(0x50000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_MAPPED)
+    rmodel.set_regions([region], None)
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert tip.startswith("review: ")       # mapped exec alone is 30
+    assert "held at review" not in tip
 
 
 # --- the allowlist: the row and the score stay, the verdict goes -----------

@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..analytics import (
-    ALLOWLISTED, Allowlist, RULE_IMAGE_REWRITTEN, RULE_REWRITTEN,
+    ALLOWLISTED, Allowlist, LIKELY_SCORE, RULE_IMAGE_REWRITTEN, RULE_REWRITTEN,
     RegionVerdict, regions_with_thread_starts, rewritten_regions, score_region,
     unpacked_regions,
 )
@@ -165,9 +165,16 @@ class RegionTableModel(QAbstractTableModel):
                 return QColor(red, green, blue, 110)  # translucent over dark theme
             if role == Qt.ToolTipRole:
                 # Band first: the number alone does not say what to do with it.
-                return (f"{verdict.band}: " + "; ".join(
+                tip = (f"{verdict.band}: " + "; ".join(
                     f"{r.text} (allowlisted)" if r.allowed else r.text
                     for r in verdict.reasons))
+                # A row can now show a top-band number in the review band,
+                # which looks like a bug unless the row says why.
+                if (verdict.map_shape_only
+                        and verdict.effective_score >= LIKELY_SCORE):
+                    tip += ("; held at review: the memory map is the whole "
+                            "case, which is also what a JIT compiler leaves")
+                return tip
         return None
 
     def set_regions(self, rows: list[Region],
