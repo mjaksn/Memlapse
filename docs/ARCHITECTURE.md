@@ -121,7 +121,7 @@ Two more rules keep the GUI thread responsive, both learned the hard way:
 
 ```sql
 recording(id, target_pid, target_name, started_utc, ended_utc, note)
-process_snapshot(id, recording_id, ts_us, pid, wset_bytes, priv_bytes, thread_count)
+process_snapshot(id, recording_id, ts_us, pid, wset_bytes, priv_bytes, thread_count, can_read, created_ft)
 thread(id, recording_id, tid, pid, start_ts, symbol_hint)
 thread_snapshot(id, recording_id, ts_us, tid, start_addr)  -- Win32 thread start addresses, per sample
 region_snapshot(id, recording_id, ts_us, base_addr, size, protect, state, type, head_hash)
@@ -141,6 +141,22 @@ mem_event(id, recording_id, ts_us, tid, kind, addr, size, protect)  -- ETW-sourc
   gracefully to structural-only scoring; those made before `head` existed keep
   their bytes in `region_blob` and read back through it, without hashes.
   `storage/db.py` adds the `head_hash` column to an older database on open.
+- `process_snapshot.can_read` and `.created_ft` describe the sample rather
+  than the process: whether the handle that took it could read memory, and
+  which instance of the pid answered. Neither can be worked out afterwards,
+  which is the whole reason they are stored (see ["A band is about a
+  moment"](#a-band-is-about-a-moment)). Without `can_read`, an empty head set
+  is ambiguous between "reads were refused" and "nothing executable to read",
+  and a replay would report a blind sample as a clean look at the memory.
+  Without `created_ft`, nothing downstream can notice that the pid was reused
+  between two samples, which the sampler cannot prevent: it opens a fresh
+  handle every tick, so a recording can span two processes.
+  `Dao.instance_changes` reports the sample timestamps where that happened.
+  Both are nullable, and **NULL means "not recorded", never false or zero**:
+  a recording made before the columns existed answers "nobody asked", and
+  reporting that as a denial would be exactly the confident wrong statement
+  the band rule refuses to make. `storage/db.py` adds both to an older
+  database on open.
 - `mem_event.tid` powers "play back this thread's activity."
 - Index on `(recording_id, ts_us)` and `(recording_id, tid, ts_us)`.
 - Store `ts_us` as **integer microseconds**, not text.
@@ -482,6 +498,49 @@ flowchart TD
     MS -- yes --> EFF["band from those points<br/>(the excused ones subtracted)"]
 ```
 
+### A band is about a moment
+
+One rule governs how the two modes relate, and the rest of this document
+leans on it.
+
+**A band answers what was observable at one sample.** Not what has been true
+at some point, and not what the recording as a whole knows. It follows that
+live mode and playback should reach the **same band for the same moment**,
+given the same bytes and the same allowlist. Where they differ today, that is
+a defect or a compensation, never a feature.
+
+**Everything else a recording knows goes beside the band, not inside it.**
+This is where playback earns its keep, and the argument is about horizon
+rather than observation. At sample N the live view knows N-1, N, and whatever
+it has accumulated; it cannot know N+1, because nothing can. A recording holds
+every sample at once, so it can count, aggregate, look ahead and correlate.
+Requiring the two modes to agree on the band costs that nothing, because the
+band was never the place those answers belong. Folding them into the band
+would instead cap a recording at what a live view could have seen, which is
+the one thing worth avoiding.
+
+Two consequences worth stating plainly, because both are easy to get backwards:
+
+- **Playback is not a superset of the live view.** They are separate samplers:
+  `RegionSampler` polls on its own `QThread` with its own handle, and the
+  region view enumerates independently on a `QThreadPool` thread. A recording
+  holds what *its* sampler saw. The advantage is that it holds all of it.
+- **Some facts have to be recorded, because they cannot be recovered.**
+  Whether the sampling handle could read memory, and which instance of the pid
+  answered, are properties of the moment that no later analysis can
+  reconstruct. That is why `process_snapshot` carries `can_read` and
+  `created_ft`, and why both are nullable: on an older recording they are
+  unknown, which is not the same as false. An empty head set means "reads were
+  refused" or "there was nothing executable to read", and only `can_read`
+  separates them.
+
+Where the model is not yet honoured: the live view carries a rewrite flag
+forward across refreshes (see [the content-change
+detector](#shipped-content-change-detector)), so its band can say more than
+the moment supports. That is a deliberate stand-in for having no timeline, and
+the way out is to give playback the history display live cannot have, not to
+make playback forget less carefully.
+
 ### End-to-end data flow
 
 The feature is purely additive over the existing collect → store → replay
@@ -673,21 +732,77 @@ detector nobody sees: a region seen rewritten stays flagged, and counted in
 the header as "rewritten while watching", until it leaves the map or the
 analyst selects a process again, which starts the history afresh.
 
-**Playback does not carry it forward, and since the calibration, that shows.**
-`PlaybackEngine.rewritten` compares the anchored sample with the one before
-it and nothing else, which is right for a mode that can scrub: the flag
-belongs to the moment it happened, and the analyst can move to that moment.
-The asymmetry is old, but it used to cost only points. A private RWX region
-scored 90 live and 75 replayed and both were "likely injection", because the
-band was a threshold on the number. Now the band turns on which rules are
-still counting, so the same region bands "likely injection" live and
-"review" at any replayed sample after the rewrite, held back as map shape
-alone. **A one-shot rewrite is therefore band-visible in a replay only at the
-sample it landed on**, and nothing on the timeline marks which sample that
-is. Carrying the flag forward in playback would fix the divergence and break
-something else, since a region rewritten once would then stay flagged for the
-rest of the recording with no way to scrub back behind it. Choosing between
-those is a design decision, not a defect to patch, and it is not made here.
+**Playback does not carry it forward, and that is the intended shape.**
+`PlaybackEngine.rewritten` compares the anchored sample with the one before it
+and nothing else. The flag belongs to the moment it happened, and a mode that
+can scrub can take the analyst to that moment. The live carry-forward is the
+compensation, not the standard: it exists because the live view has no
+timeline to send anyone back to, so a change that showed for one tick and
+vanished would be a detector nobody sees. Read the two behaviours that way
+round and they stop looking like a disagreement.
+
+The rule this settles is in ["A band is about a
+moment"](#a-band-is-about-a-moment): the band answers what was observable at
+one sample, so both modes should reach the same band for the same sample, and
+everything a recording knows beyond that sample belongs beside the band rather
+than inside it. Live's stickiness is the one thing that currently breaks that
+rule, and it breaks it in the direction of saying more than the moment
+supports.
+
+What follows is a real limitation and it is not fixed yet: **a one-shot
+rewrite is band-visible in a replay only at the sample it landed on**, and
+nothing on the timeline marks which sample that is. The answer is not to make
+playback sticky, which would cost the scrub-back that makes playback worth
+having. It is to show the history alongside the band, which only a recording
+can do at all. See ["Planned: rewrite history"](#planned-rewrite-history).
+
+### Planned: rewrite history
+
+The history a recording holds and a live view cannot: how many times each
+region was rewritten across the whole recording, and at which samples. It is
+the worked example of ["A band is about a
+moment"](#a-band-is-about-a-moment), showing beside the band what the band
+itself must not absorb, and it closes the gap the content-change detector
+leaves, where a one-shot rewrite is band-visible only at the sample it landed
+on.
+
+Nothing new has to be captured. `region_snapshot` already holds
+`ts_us, base_addr, size, protect, state, head_hash` for every region of every
+sample, so one query answers the whole recording: a `LAG` window partitioned
+by `base_addr` compares each region against its own previous appearance.
+
+The one subtlety is that a window function will happily compare across a gap.
+A region absent for a sample and back with different bytes is **not** a
+rewrite by the definition in `rewritten_regions`, which needs two consecutive
+samples, so the query has to rank samples and require the previous row to be
+`n - 1`. Prototyped and cross-checked against `rewritten_regions` applied
+pairwise, including that case: same answers.
+
+Cost, measured on this machine on 2026-09-09, best of three:
+
+| Recording | Rows | Whole table | Filter pushed below the window |
+| --- | ---: | ---: | ---: |
+| 2 min, 800 regions | 96,000 | 216 ms | **37 ms** |
+| 10 min, 1,500 regions | 900,000 | 2,397 ms | **444 ms** |
+
+The push-down is what makes it affordable: only committed, executable,
+non-guard rows carrying a head enter the window, about 14 percent of the
+table. An index on `(recording_id, base_addr, ts_us)` does **not** help,
+because the window sorts everything regardless; that was measured too, so it
+does not need re-deriving. Once per recording on open, off the GUI thread, is
+the intended shape.
+
+Three pieces, in the order they are worth building:
+
+1. `PlaybackEngine.rewrite_history()` returning `{base_addr: [ts, ...]}`. Pure
+   storage and services, testable without Qt.
+2. The Score column tooltip names the count and the most recent time, so a
+   held-back row can no longer imply calm about a region the recording knows
+   was rewritten. This alone removes the misleading part.
+3. `TimelineWidget.set_marks()` and tick painting on the scrubber, so an
+   analyst can see which samples to seek to rather than only be told they
+   exist. The widget has no custom painting today, so this is the only
+   genuinely new UI work.
 
 ### Planned: temporal RW→RX transition detector
 
@@ -755,12 +870,14 @@ commercial platform uses ([RESEARCH_NOTES.md](RESEARCH_NOTES.md) 7.1 and 7.3):
   allowlist while the watch scored against the real one, and the two
   contradicted each other on the same region.
 
-  This is a claim about the allowlist and nothing wider. The two modes can
-  still band the same moment differently, for a reason that has nothing to do
-  with entries: the live view carries a rewrite forward (see [the content
-  change detector](#shipped-content-change-detector)) while playback compares
-  only the anchored sample with the one before it. Both are deliberate. The
-  consequence is recorded there.
+  This is one instance of the wider rule in ["A band is about a
+  moment"](#a-band-is-about-a-moment): the two modes should reach the same
+  band for the same sample, and an entry that meant one thing live and another
+  on replay broke that. One departure from the rule remains, and it is not
+  about entries: the live view carries a rewrite forward (see [the
+  content-change detector](#shipped-content-change-detector)) while playback
+  compares only the anchored sample with the one before it. That one is live
+  standing in for a timeline it does not have.
 
 Measured on this machine on 2026-09-08, unelevated, with entries for ten
 common JIT hosts on `private-exec` and `rwx` only: regions in the likely
