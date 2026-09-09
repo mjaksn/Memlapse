@@ -57,6 +57,9 @@ class MainWindow(QMainWindow):
         # Owned by the GUI thread; each collector hands its total over.
         self._process_count = 0
         self._dropped = {"process": 0, "system": 0}
+        #: The sample the timeline is parked on, so a whole-run answer that
+        #: arrives after the seek can be folded into what is already shown.
+        self._playback_ts: int | None = None
 
         #: The rules excused for each process, as configured now. The window
         #: owns it because two things need the same one: the live view scores
@@ -271,25 +274,45 @@ class MainWindow(QMainWindow):
         if self.playback is not None:
             self.playback.close()
         self.playback = PlaybackEngine()
+        # Connected before the open, never after: the walk is free to finish
+        # inside open() and a listener attached afterwards would miss it.
+        self.playback.rewrites_ready.connect(self._on_rewrites_ready)
         times = self.playback.open(recording_id)
         self._mode = "playback"
         self.live_action.setEnabled(True)
         self.record_action.setEnabled(False)
         self._timeline_dock.show()
+        self._playback_ts = None
         self.timeline.set_sample_times(times)
-        # After the times and never before: they are what a mark is placed
-        # against, and setting them clears whatever the last recording marked.
-        self.timeline.set_marks(sorted(
-            {ts for stamps in self.playback.rewrites.values() for ts in stamps}))
+        # After the times, always: they are what a mark is placed against, and
+        # setting them clears whatever the last recording marked. Called here
+        # rather than left to the signal because a short recording can finish
+        # its walk inside open(), before there was a timeline to mark.
+        self._on_rewrites_ready()
         if not times:
             self.region_view.show_recorded_regions([], "Recording has no samples.")
         self.statusBar().showMessage(
             f"Playback: recording #{recording_id}, {len(times)} samples"
         )
 
+    def _on_rewrites_ready(self) -> None:
+        """The whole-run walk landed, so the marks and the counts can appear.
+
+        The recording has been scrubbable since it opened; this fills in the
+        part that had to be walked for. Re-running the current seek is what
+        puts the counts into the tooltips, which were built without them.
+        """
+        if self._mode != "playback" or self.playback is None:
+            return
+        self.timeline.set_marks(sorted(
+            {ts for stamps in self.playback.rewrites.values() for ts in stamps}))
+        if self._playback_ts is not None:
+            self._on_seek(self._playback_ts)
+
     def _on_seek(self, ts_us: int) -> None:
         if self._mode != "playback" or self.playback is None:
             return
+        self._playback_ts = ts_us
         state, regions = self.playback.seek(ts_us)
         heads = self.playback.heads(ts_us)
         rewritten = self.playback.rewritten(ts_us)

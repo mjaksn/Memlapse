@@ -659,17 +659,23 @@ the largest process measured on this machine.
 - Each seek in playback now reads the previous sample's region list and head
   hashes as well as the anchored sample's, so a scrub costs about three region
   reads per step instead of one. The hashes query touches no blob content.
-- Opening a recording walks it once for the rewrite history, on the GUI
-  thread, which is 58 ms for a two minute recording and 573 ms for a ten
-  minute one (measured in ["Shipped: rewrite
-  history"](#shipped-rewrite-history) below). The walk is linear in the
-  recording, so that is a stall that keeps growing: an hour of samples pays
-  about six times the ten minute figure. It is a one-shot cost on a
-  deliberate action rather than a repeated one, which is why it sits on the
-  GUI thread at all; a recording long enough for the wait to be intolerable
-  is the point at which it has to move to a worker with its own connection
-  and arrive by signal. A seek costs nothing more afterwards: the tooltip
-  and the timeline marks both read the dictionary that pass built.
+- Opening a recording walks it once for the rewrite history: 58 ms for a two
+  minute recording and 573 ms for a ten minute one (measured in ["Shipped:
+  rewrite history"](#shipped-rewrite-history) below). The walk is linear in
+  the recording, so an hour of samples pays about six times the ten minute
+  figure and there is no length at which it stops growing. That is why it is
+  the one read here that does not happen on the GUI thread: it goes to a
+  `QThreadPool` thread with a connection of its own and arrives on
+  `PlaybackEngine.rewrites_ready`. The recording is scrubbable the moment it
+  opens, and the marks and the counts fill in when the walk lands, which is
+  the same no-backlog shape the live view uses for its own enumeration. A
+  seek costs nothing more afterwards: the tooltip and the timeline marks both
+  read the dictionary that pass built.
+- A walk that lands late is dropped rather than applied. `PlaybackEngine`
+  stamps each walk with a sequence number and bumps it on every open and on
+  close, so a long recording still being walked when the analyst opens a
+  short one cannot overwrite what is on screen, and one still running when
+  playback is left cannot report against a closed connection.
 - Scoring is O(head length) per region and runs on the GUI thread only at
   `set_regions` time (per seek or per live refresh), which is negligible. The
   live change detector compares head bytes directly rather than hashing them,

@@ -687,3 +687,84 @@ def test_a_new_process_does_not_continue_the_old_one_s_allocation(tmp_db):
         assert engine.rewrites_at(2_000) == {EXEC_IDENTITY: [2_000]}
     finally:
         engine.close()
+
+
+# --- the whole-run walk runs off the GUI thread ------------------------------
+import memlapse.services.playback as playback_mod  # noqa: E402
+
+
+def test_the_walk_goes_to_the_qt_pool_by_default():
+    """The app runs it on a pool thread; only the tests run it inline.
+
+    Every test here substitutes an inline pool, so without this the real
+    factory would never run and the thing being claimed about the app would
+    be the one thing untested.
+    """
+    from PySide6.QtCore import QThreadPool
+    assert isinstance(playback_mod._history_pool(), QThreadPool)
+
+
+def test_a_walk_that_lands_after_the_analyst_moved_on_is_dropped(tmp_db):
+    """A slow recording must not overwrite the one now on screen.
+
+    The walk is linear in the recording, so a long one can still be going
+    when the analyst opens a short one. Its answer arrives addressed to the
+    question it was asked, and by then that is not the question.
+    """
+    slow = _rewrite_db(tmp_db, [(1_000, b"aaa"), (2_000, b"bbb")])
+    quiet = _rewrite_db(tmp_db, [(3_000, b"ccc"), (4_000, b"ccc")])
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(quiet)
+        assert engine.rewrites == {}
+        landed = []
+        engine.rewrites_ready.connect(lambda: landed.append(True))
+        # A worker for the recording opened before this one, finishing now.
+        stale = playback_mod._HistoryWorker(tmp_db, slow, engine._sequence - 1)
+        stale.signals.done.connect(engine._history_walked)
+        stale.run()
+        assert engine.rewrites == {}      # not the slow recording's rewrite
+        assert landed == []               # and nothing was told to redraw
+    finally:
+        engine.close()
+
+
+def test_the_worker_walks_what_the_engine_would_have(tmp_db):
+    """The worker's own connection has to reach the same answer.
+
+    It opens its own database handle, since SQLite connections cannot cross
+    threads, so nothing but a test says it reads the same recording the same
+    way.
+    """
+    rid = _two_spell_db(tmp_db)
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        expected = engine.rewrite_spells(rid)
+        got = []
+        worker = playback_mod._HistoryWorker(tmp_db, rid, 1)
+        worker.signals.done.connect(lambda seq, spells: got.append((seq, spells)))
+        worker.run()
+        assert got == [(1, expected)]
+    finally:
+        engine.close()
+
+
+def test_closing_retires_a_walk_that_is_still_running(tmp_db):
+    """Its connection is gone, so its answer is about nothing.
+
+    Closing is what happens when the analyst leaves playback, and a walk
+    started before that can still be going. Taking its result would put a
+    closed recording's history back on an engine nobody is looking at, and
+    announce it.
+    """
+    rid = _rewrite_db(tmp_db, [(1_000, b"aaa"), (2_000, b"bbb")])
+    engine = PlaybackEngine(db_path=tmp_db)
+    engine.open(rid)
+    in_flight = playback_mod._HistoryWorker(tmp_db, rid, engine._sequence)
+    in_flight.signals.done.connect(engine._history_walked)
+    engine.close()
+
+    landed = []
+    engine.rewrites_ready.connect(lambda: landed.append(True))
+    in_flight.run()
+    assert landed == []

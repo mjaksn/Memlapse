@@ -114,3 +114,23 @@ def fake_sampler_cls():
     FakeSampler.instances.clear()
     yield FakeSampler
     FakeSampler.instances.clear()
+
+
+class InlinePool:
+    """A QThreadPool stand-in that runs the runnable where it is handed over.
+
+    The whole-run rewrite walk goes to a pool thread in the app. Tests need it
+    finished when ``open`` returns, and coverage does not trace the threads a
+    Qt pool creates, so every test runs it inline instead.
+    """
+
+    def start(self, runnable) -> None:
+        runnable.run()
+
+
+@pytest.fixture(autouse=True)
+def inline_history_pool(monkeypatch):
+    """Every PlaybackEngine walks its recording inline. See InlinePool."""
+    from memlapse.services import playback
+    monkeypatch.setattr(playback.PlaybackEngine, "pool_factory",
+                        staticmethod(InlinePool))

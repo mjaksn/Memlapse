@@ -61,7 +61,7 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 443 passed with 100 percent line and branch
+(2026-09-06); the test run is 448 passed with 100 percent line and branch
 coverage (2026-09-09).
 
 ## Conventions
@@ -141,6 +141,14 @@ coverage (2026-09-09).
   tick, so nothing stops the pid being reused between two samples and a
   stranger's map being appended to the same recording. That is why every
   sample stores `created_ft`; `Dao.instance_changes` reports where it changed.
+- Coverage does not trace the threads a Qt pool or a `QThread` creates, so a
+  `run()` reached only through `start()` reads as uncovered however often it
+  executes. Test a runnable by calling `run()` on the test thread, as
+  `test_region_sampler.py` does for the sampler, and substitute a pool that
+  runs inline where a signal has to arrive: `tests/conftest.py` does that for
+  the rewrite-history walk with an autouse fixture. One test still calls the
+  real pool factory, or the thing claimed about the app would be the one
+  thing untested.
 - A band is a claim about one sample, so live mode and playback should reach
   the same band for the same moment, and everything else a recording knows
   belongs beside the band rather than inside it. The one live departure, the

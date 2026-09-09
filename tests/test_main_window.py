@@ -651,3 +651,20 @@ def test_recording_is_started_with_the_windows_allowlist(main_window):
     win._toggle_record()
     assert FakeSampler.instances[-1].allowlist is win.allowlist
     assert win.region_view._allowlist is win.allowlist
+
+
+def test_a_walk_that_lands_after_the_open_still_marks_the_timeline(main_window):
+    """The case the pool exists for, which the inline pool cannot produce.
+
+    In the app the walk finishes on a pool thread some time after the
+    recording is on screen, and the window has to take it then. Every test
+    here runs the walk inline, so this drives the signal by hand: clear what
+    the open put there, announce a walk, and the marks must come back.
+    """
+    win, db = main_window
+    rid = _seed_rewrite(db)
+    win._open_recording(rid)
+    assert win.timeline.slider._marks == [1]
+    win.timeline.set_marks([])
+    win.playback.rewrites_ready.emit()          # as the pool thread would
+    assert win.timeline.slider._marks == [1]

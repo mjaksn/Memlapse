@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
+
 from ..analytics import (
     Allowlist, EXEC_MASK, region_identity, regions_with_thread_starts,
     rewritten_regions, unpacked_regions,
@@ -52,8 +54,114 @@ def describe_rewrites(times: Sequence[int], origin_us: int) -> str:
             f"most recently at {when}")
 
 
-class PlaybackEngine:
-    def __init__(self, db_path=None) -> None:
+def walk_spells(
+    dao: Dao, recording_id: int
+) -> dict[tuple[int, int, int, int], list[tuple[int, int, list[int]]]]:
+    """The whole-run walk, keeping each identity's occurrences apart.
+
+    An identity is not quite an allocation either. Windows can free a
+    region and hand back one with the same base, size, protection and
+    state, and no structural key can tell those apart; only the gap
+    between them can, and only a walk that sees every sample has it. So
+    each unbroken run of samples an identity appears in is one spell,
+    recorded as ``(first_ts, last_ts, times)``, and a region that comes
+    back after being gone starts a new one. :meth:`rewrites_at` then hands
+    a row the spell it is actually in, rather than everything the address
+    has ever done.
+
+    A sample whose map came back empty closes nothing. Nothing was seen
+    that tick, which is not the same as everything having been freed, and
+    treating it as a free would cut every spell in the recording in two
+    every time a sample could not be read.
+    """
+    spells: dict[tuple[int, int, int, int],
+                 list[list]] = {}
+    live: dict[tuple[int, int, int, int], list] = {}
+    before: list[Region] = []
+    before_digests: dict[int, bytes] = {}
+    restarts = set(dao.instance_changes(recording_id))
+    walk = dao.region_samples(
+        recording_id, state=MEM_COMMIT, protect_any=EXEC_MASK,
+        protect_none=PAGE_GUARD)
+    for ts_us, regions, digests in walk:
+        if ts_us in restarts:
+            # A different process holds the pid now, so nothing that was
+            # open belongs to what is about to appear.
+            before, before_digests, live = [], {}, {}
+        shown = {r.base_addr: r for r in regions}
+        if regions:
+            present = {region_identity(r) for r in regions}
+            for identity in list(live):
+                if identity not in present:
+                    del live[identity]
+            for identity in present:
+                spell = live.get(identity)
+                if spell is None:
+                    spell = [ts_us, ts_us, []]
+                    spells.setdefault(identity, []).append(spell)
+                    live[identity] = spell
+                else:
+                    spell[1] = ts_us
+        for base in rewritten_regions(before, before_digests, regions, digests):
+            live[region_identity(shown[base])][2].append(ts_us)
+        before, before_digests = regions, digests
+    return {identity: [(a, b, times) for a, b, times in runs]
+            for identity, runs in spells.items()}
+
+
+def _history_pool() -> QThreadPool:
+    """The pool the whole-run walk runs on. Patched in tests to run inline."""
+    return QThreadPool.globalInstance()
+
+
+class _HistoryWorker(QRunnable):
+    """One recording's whole-run walk, off the GUI thread.
+
+    Opens a connection of its own, because SQLite connections cannot cross
+    threads and the engine's belongs to the thread that built it. Carries the
+    sequence number it was started with so a result that arrives after the
+    analyst has opened something else can be recognised and dropped.
+
+    ``run`` is called directly in tests. Coverage does not trace the threads a
+    Qt pool creates, so a runnable exercised only through ``start`` reads as
+    dead code (AGENTS.md).
+    """
+
+    class Signals(QObject):
+        done = Signal(int, object)      # sequence, spells
+
+    def __init__(self, db_path, recording_id: int, sequence: int) -> None:
+        super().__init__()
+        self.signals = self.Signals()
+        self._db_path = db_path
+        self._recording_id = recording_id
+        self._sequence = sequence
+
+    def run(self) -> None:
+        conn = connect(self._db_path)
+        try:
+            spells = walk_spells(Dao(conn), self._recording_id)
+        finally:
+            conn.close()
+        self.signals.done.emit(self._sequence, spells)
+
+
+class PlaybackEngine(QObject):
+    #: Emitted when the whole-run walk lands, so the marks and the tooltips
+    #: can be filled in. A recording is usable before this arrives.
+    rewrites_ready = Signal()
+
+    #: Looked up per engine so a test can substitute a pool that runs inline.
+    pool_factory = staticmethod(_history_pool)
+
+    def __init__(self, db_path=None, parent=None) -> None:
+        super().__init__(parent)
+        self._db_path = db_path
+        self._pool = self.pool_factory()
+        #: Bumped on every open and on close, so a walk that finishes after
+        #: the analyst moved on is dropped instead of overwriting what is on
+        #: screen with a previous recording's history.
+        self._sequence = 0
         self._conn = connect(db_path)
         self._dao = Dao(self._conn)
         self.recording_id: int | None = None
@@ -97,11 +205,13 @@ class PlaybackEngine:
             (r.target_name for r in self._dao.list_recordings()
              if r.id == recording_id), "")
         self.instance_changes = self._dao.instance_changes(recording_id)
-        self._spells = self.rewrite_spells(recording_id)
-        self.rewrites = {
-            identity: [t for _, _, times in runs for t in times]
-            for identity, runs in self._spells.items()
-            if any(times for _, _, times in runs)}
+        # The walk is the one read here that grows with the recording, so it
+        # goes to a pool thread and the answer arrives on `rewrites_ready`.
+        self._spells, self.rewrites = {}, {}
+        self._sequence += 1
+        worker = _HistoryWorker(self._db_path, recording_id, self._sequence)
+        worker.signals.done.connect(self._history_walked)
+        self._pool.start(worker)
         self.allowlist = self._dao.allowlist_for(recording_id)
         return self.sample_times
 
@@ -219,56 +329,8 @@ class PlaybackEngine:
     def rewrite_spells(
         self, recording_id: int
     ) -> dict[tuple[int, int, int, int], list[tuple[int, int, list[int]]]]:
-        """The same walk, but keeping each identity's occurrences apart.
-
-        An identity is not quite an allocation either. Windows can free a
-        region and hand back one with the same base, size, protection and
-        state, and no structural key can tell those apart; only the gap
-        between them can, and only a walk that sees every sample has it. So
-        each unbroken run of samples an identity appears in is one spell,
-        recorded as ``(first_ts, last_ts, times)``, and a region that comes
-        back after being gone starts a new one. :meth:`rewrites_at` then hands
-        a row the spell it is actually in, rather than everything the address
-        has ever done.
-
-        A sample whose map came back empty closes nothing. Nothing was seen
-        that tick, which is not the same as everything having been freed, and
-        treating it as a free would cut every spell in the recording in two
-        every time a sample could not be read.
-        """
-        spells: dict[tuple[int, int, int, int],
-                     list[list]] = {}
-        live: dict[tuple[int, int, int, int], list] = {}
-        before: list[Region] = []
-        before_digests: dict[int, bytes] = {}
-        restarts = set(self._dao.instance_changes(recording_id))
-        walk = self._dao.region_samples(
-            recording_id, state=MEM_COMMIT, protect_any=EXEC_MASK,
-            protect_none=PAGE_GUARD)
-        for ts_us, regions, digests in walk:
-            if ts_us in restarts:
-                # A different process holds the pid now, so nothing that was
-                # open belongs to what is about to appear.
-                before, before_digests, live = [], {}, {}
-            shown = {r.base_addr: r for r in regions}
-            if regions:
-                present = {region_identity(r) for r in regions}
-                for identity in list(live):
-                    if identity not in present:
-                        del live[identity]
-                for identity in present:
-                    spell = live.get(identity)
-                    if spell is None:
-                        spell = [ts_us, ts_us, []]
-                        spells.setdefault(identity, []).append(spell)
-                        live[identity] = spell
-                    else:
-                        spell[1] = ts_us
-            for base in rewritten_regions(before, before_digests, regions, digests):
-                live[region_identity(shown[base])][2].append(ts_us)
-            before, before_digests = regions, digests
-        return {identity: [(a, b, times) for a, b, times in runs]
-                for identity, runs in spells.items()}
+        """:func:`walk_spells` on this engine's own connection."""
+        return walk_spells(self._dao, recording_id)
 
     def rewrites_at(self, ts_us: int) -> dict[
             tuple[int, int, int, int], list[int]]:
@@ -294,7 +356,20 @@ class PlaybackEngine:
                     break
         return found
 
+    def _history_walked(self, sequence: int, spells) -> None:
+        """Take a finished walk, unless it is answering a stale question."""
+        if sequence != self._sequence:
+            return
+        self._spells = spells
+        self.rewrites = {
+            identity: [t for _, _, times in runs for t in times]
+            for identity, runs in spells.items()
+            if any(times for _, _, times in runs)}
+        self.rewrites_ready.emit()
+
     def close(self) -> None:
+        # Anything still walking is now answering for a closed connection.
+        self._sequence += 1
         self._conn.close()
 
     def thread_start_regions(self, ts_us: int) -> set[int]:
