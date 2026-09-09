@@ -590,7 +590,9 @@ table keyed on process, region base and heuristic, with first seen, last seen
 and hit count, is the missing layer between samples and the analyst. The
 rewrite history (ARCHITECTURE.md, "Shipped: rewrite history") is the first
 slice of that shape: a count and a last-seen time for one heuristic, keyed on
-region base, shown beside the per-sample verdict rather than in place of it.
+region identity (base, size, protection and state, see `region_identity`)
+rather than on the address alone, shown beside the per-sample verdict rather
+than in place of it.
 One heuristic and one recording, so the table itself is still missing; what
 the slice settles is where an answer of that kind belongs.
 
