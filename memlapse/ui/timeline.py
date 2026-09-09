@@ -73,7 +73,8 @@ class MarkedSlider(QSlider):
         painter.setPen(QPen(QColor(ACCENT_2), MARK_WIDTH))
         for value in self._marks:
             offset = style.sliderPositionFromValue(
-                self.minimum(), self.maximum(), value, span)
+                self.minimum(), self.maximum(), value, span,
+                option.upsideDown)
             x = groove.x() + offset + handle.width() // 2
             painter.drawLine(x, middle - MARK_HEIGHT // 2,
                              x, middle + MARK_HEIGHT // 2)
