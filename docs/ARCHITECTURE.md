@@ -359,7 +359,7 @@ a bare number does not tell an analyst what to do with it:
 |---|---:|---|
 | low | 1 to 29 | Something tripped, not enough to spend time on. Shown and tinted all the same. |
 | review | `REVIEW_SCORE` = 30 to 74 | Worth a second look. Most JIT and EDR artefacts land here. |
-| likely injection | `LIKELY_SCORE` = 75 and above | Act on it. |
+| likely injection | `LIKELY_SCORE` = 75 and above, **and at least one point from outside the map** | Act on it. |
 
 The lower edge is 30 rather than 50 on the reasoning in RESEARCH_NOTES.md
 7.1: a commercial platform treats 30 as the point where a detection is worth
@@ -367,6 +367,41 @@ forwarding, and a band that starts at 50 leaves the single-signal findings
 between them looking identical to noise. Three bands cost nothing on an
 additive scale that already exists, and the lowest band is where an analyst
 learns what their own machine looks like.
+
+The top edge takes one thing more than the points. `MAP_SHAPE_RULES` names
+the three a single `VirtualQueryEx` answers on its own, `private-exec`,
+`mapped-exec` and `rwx`, and a region whose whole case is those stops at
+**review** however far it clears `LIKELY_SCORE`. The map says a page is
+private, executable and writable; it cannot say whether a JIT compiler or a
+loader put it there, and on an ordinary desktop the compilers outnumber the
+loaders by every region there is. Reaching the top band takes a signal from
+somewhere the map cannot see: bytes that were read, a thread found starting
+in the region, or a change between two looks at it.
+
+This is calibration, not a new heuristic, and it was measured before it was
+written. `private-exec` (50) plus `rwx` (25) is exactly 75, exactly
+`LIKELY_SCORE`, so that pair alone used to top the scale. Enumerating every
+rule set a region can actually produce, it is the only one that reached the
+top band without a second kind of evidence. Surveyed unelevated on this
+machine on 2026-09-08, across 141 readable processes and 208,183 regions of
+which 1,065 scored at all, it was also the only one that did: all 439
+regions in the top band scored on `private-exec + rwx` and nothing else. The
+rule moves every one of them to review and leaves the other 626 scoring
+regions exactly where they were.
+
+The alternatives were weighed against the same enumeration and rejected.
+Raising `LIKELY_SCORE` to 80 drops 18 rule sets out of the top band, among
+them `private-exec + thread-start`: a thread running in unbacked memory with
+no RWX anywhere, which is the remote-thread injection tell and the last
+thing to give up. Lowering the RWX points to 20 drops 8, including module
+stomping that carries a PE header. Asking for one point from outside the map
+drops exactly one, the pair itself, and nothing else at all.
+
+The table can now show a 75 in the review band, which reads as a bug unless
+the row accounts for it, so a held-back region says so in its tooltip: `held
+at review: the memory map is the whole case, which is also what a JIT
+compiler leaves`. The note appears only where the number and the band
+disagree, never on a region that simply scored too little.
 
 ```mermaid
 flowchart TD
@@ -404,7 +439,9 @@ flowchart TD
     RW --> CAP
     CAP --> AL{"points left after excusing<br/>this image's allowlisted rules?"}
     AL -- none --> ALW["band = allowlisted<br/>(score kept, tint neutral)"]
-    AL -- some --> EFF["band from those points<br/>(the excused ones subtracted)"]
+    AL -- some --> MS{"any point from outside<br/>the memory map?"}
+    MS -- no --> RV["band = review at most<br/>(map shape alone)"]
+    MS -- yes --> EFF["band from those points<br/>(the excused ones subtracted)"]
 ```
 
 ### End-to-end data flow
@@ -530,13 +567,21 @@ NyxWatch author acknowledges apply here:
 
 1. **JIT false positives.** .NET, the JVM, and JavaScript engines (V8) legally
    allocate private, executable (sometimes RWX) memory for generated code. A
-   naive scan lights them up: measured unelevated on this machine on
-   2026-09-08, 996 regions reached the likely injection band with nothing
-   malicious running. The allowlist [below](#shipped-allowlist-semantics)
-   takes that to 33, but it is a list someone has to write and keep, and it
-   is keyed on an image name, so it excuses anything that adopts one.
-   Behavioural context would be the stronger answer, which is why the
-   thresholds above still want tuning against a JIT-heavy baseline.
+   naive scan lights them up, and this one did: measured unelevated on this
+   machine on 2026-09-08, every region that reached the likely injection band
+   with nothing malicious running got there on `private-exec + rwx` alone.
+   Two things answer that now and they answer different halves of it. The
+   [band rule](#the-scoring-model) empties the top band of the whole class,
+   without a list and without knowing which processes are JIT hosts, by
+   declining to escalate on the shape of the map alone. The
+   [allowlist](#shipped-allowlist-semantics) then moves a named host's rows
+   out of review as well, which the band rule cannot do, since a JIT arena is
+   a real observation and review is a fair place for it.
+   What neither does is tell a JIT arena from a payload on the evidence; the
+   band rule declines to guess and the allowlist is told the answer. The
+   allowlist is still a list someone has to write and keep, and it is still
+   keyed on an image name, so it excuses anything that adopts one.
+   Behavioural context remains the stronger answer.
 2. **RW→RX flip evasion.** Mature loaders allocate `PAGE_READWRITE`, write the
    payload, then `VirtualProtect` to `PAGE_EXECUTE_READ`, never holding RWX. A
    single snapshot can miss this. The **temporal** detector below closes it.
@@ -651,6 +696,23 @@ landed in the allowlisted band. The review band barely moved, 396 to 345,
 because it is mostly `mapped-exec` on .NET images, which is a different
 problem this does not claim to solve. The absolute counts depend on what is
 running; the before and after come from the same survey.
+
+That measurement predates the band rule above and is left as it stands,
+since it is what the allowlist does on its own. The two now divide the work,
+and the survey in the scoring section shows how. Of the 439 regions the band
+rule moves out of the top band, the allowlist goes on to quiet 377
+completely, into `allowlisted`; the remaining 62 stay in review, because
+they belong to processes nobody put on the list. The allowlist also reaches
+65 regions the band rule never touched, which were in review all along, for
+442 allowlisted in total.
+
+Neither subsumes the other, and the reason is worth keeping in view. The
+band rule needs no list, so it is the half that covers a host nobody thought
+to name, and on that survey it was the only thing standing between
+`cef_server.exe` and a top-band verdict. The allowlist is the half that can
+quiet a row completely, which the band rule will not do, because a JIT arena
+really is private executable memory and review is an honest place to leave
+an observation nobody has vouched for.
 
 ### Planned: the rest of the allowlist
 

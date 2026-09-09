@@ -529,9 +529,13 @@ Response" [V, p. 458, p. 486]. Memlapse had no threshold at all in the code:
 every non-zero score was tinted alike, so nothing told an analyst which of
 them was worth a second look. A three-band display (with 30 as the floor of
 "review") costs nothing and matches the additive scale already in use.
-**Shipped:** `RegionVerdict.band` returns low, review or likely injection from
-`REVIEW_SCORE` (30) and `LIKELY_SCORE` (75), and the band leads the region
-tooltip.
+**Shipped:** `RegionVerdict.band` returns low, review, likely injection or
+allowlisted from `REVIEW_SCORE` (30) and `LIKELY_SCORE` (75), and the band
+leads the region tooltip. The top band asks for one thing beyond the points:
+a region whose whole case is the shape of the map, private or mapped plus
+RWX, stops at review however high it scores, because the map cannot tell a
+JIT arena from a payload and on an ordinary machine it is nearly always the
+former. See ARCHITECTURE.md for the survey that settled it.
 
 **Separate confidence from severity. New.** Impact "is initially Confidence *
 Severity / 100" [V, p. 513]; severity is a property of the threat type,

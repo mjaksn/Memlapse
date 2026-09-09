@@ -26,7 +26,10 @@ analyst scrub back to the moment the memory changed.
   score (unbacked private or mapped executable memory, RWX, PE header, NOP
   sled, high entropy, and a thread whose start address lands in memory no
   image backs) shown as a Score column with a heat tint and a reason tooltip
-  in the region view, banded low, review or likely injection. The score also
+  in the region view, banded low, review, likely injection or allowlisted.
+  The top band needs a signal the memory map alone cannot give, so a page
+  that is merely private and RWX, which is what a JIT compiler leaves behind,
+  stops at review. The score also
   rises for a region whose code was rewritten in place, and again if its
   entropy fell from packed to code-like, the traces an injector leaves when
   it overwrites executable memory that already exists and when a payload
