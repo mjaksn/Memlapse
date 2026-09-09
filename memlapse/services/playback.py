@@ -26,6 +26,11 @@ class PlaybackEngine:
         #: entry is keyed on. Playback has to score against the same entries
         #: as live mode or the two disagree about the same process.
         self.target_name: str = ""
+        #: Sample timestamps where the recorded process instance changed, so
+        #: the samples on either side describe different processes under one
+        #: pid. Empty for every well-behaved recording, and empty for one made
+        #: before the creation time was stored, which is not the same thing.
+        self.instance_changes: list[int] = []
 
     def list_recordings(self) -> list[RecordingRow]:
         return self._dao.list_recordings()
@@ -37,6 +42,7 @@ class PlaybackEngine:
         self.target_name = next(
             (r.target_name for r in self._dao.list_recordings()
              if r.id == recording_id), "")
+        self.instance_changes = self._dao.instance_changes(recording_id)
         return self.sample_times
 
     def seek(self, ts_us: int) -> tuple[ProcState | None, list[Region]]:

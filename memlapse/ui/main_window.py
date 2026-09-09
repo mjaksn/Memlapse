@@ -287,6 +287,15 @@ class MainWindow(QMainWindow):
                 f"{len(regions)} regions | WS {_fmt_bytes(state.wset_bytes)} | "
                 f"Priv {_fmt_bytes(state.priv_bytes)} | {state.thread_count} threads"
             )
+            # The live header says this for a target that denied reads, and a
+            # replay of one has to say it too, or the analyst reads an empty
+            # head set as a clean look at the memory. `is False` on purpose:
+            # None means the recording predates the column, which is not a
+            # denial and must not be reported as one.
+            if state.can_read is False:
+                header += "  (no read access, map only)"
+            if any(ts <= ts_us for ts in self.playback.instance_changes):
+                header += "  (pid reused during this recording)"
             self._status_label.setText(
                 f"WS {_fmt_bytes(state.wset_bytes)}  |  {state.thread_count} threads"
             )

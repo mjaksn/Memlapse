@@ -58,9 +58,9 @@ REGION_DUMP_MAX = 16 * 1024 * 1024
 #: How often the live map is re-enumerated while the view is on screen. Matches
 #: the recorder's default one second cadence, so the live detector sees the
 #: same moments a recording of the same process captures. It does not follow
-#: that the two band a moment alike: live carries a rewrite forward and
-#: playback does not, which ARCHITECTURE.md records under the content-change
-#: detector.
+#: that the two band a moment alike: live carries a rewrite forward, standing
+#: in for the scrub-back it has no timeline to offer, while playback keeps the
+#: flag on the sample it happened. ARCHITECTURE.md, "A band is about a moment".
 LIVE_REFRESH_MS = 1000
 
 
@@ -399,6 +399,14 @@ class RegionView(QWidget):
         # a head with itself and never fall.
         fell = unpacked_regions(self._prev_heads, heads, changed)
         present = {r.base_addr for r in regions}
+        # Sticky while the region is still in the map. This is the one place
+        # the live band says more than the moment supports, and it is a
+        # deliberate stand-in rather than the standard: with no timeline to
+        # scrub, a change that showed for one tick and vanished would be a
+        # detector nobody sees. A recording of the same watch needs no such
+        # compensation, because it can put the analyst back on the sample the
+        # change landed on, so playback keeps the flag there and shows the
+        # history separately. See ARCHITECTURE.md, "A band is about a moment".
         self._live_rewritten = (self._live_rewritten & present) | changed
         self._live_unpacked = (self._live_unpacked & present) | fell
         self._prev_regions, self._prev_heads = regions, heads

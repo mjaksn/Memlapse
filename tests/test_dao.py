@@ -206,3 +206,63 @@ def test_thread_starts_at_before_any_sample_is_empty(tmp_db):
     rid = dao.create_recording(1000, "p.exe", 0)
     assert dao.thread_starts_at(rid, 1_000) == []
     conn.close()
+
+
+# --- can_read and created_ft: recorded, because a replay cannot infer them ---
+def test_can_read_and_created_ft_round_trip(dao):
+    rid = dao.create_recording(1000, "p.exe", 0)
+    dao.add_sample(rid, 1_000,
+                   ProcState(1_000, 1000, 1, 1, 1, can_read=False,
+                             created_ft=132_000_000_000_000_001),
+                   [])
+    got = dao.state_at(rid, 1_000)
+    assert got.can_read is False                      # not 0, not None
+    assert got.created_ft == 132_000_000_000_000_001
+
+
+def test_can_read_true_round_trips_as_true(dao):
+    rid = dao.create_recording(1000, "p.exe", 0)
+    dao.add_sample(rid, 1_000,
+                   ProcState(1_000, 1000, 1, 1, 1, can_read=True), [])
+    assert dao.state_at(rid, 1_000).can_read is True
+
+
+def test_a_recording_written_without_the_columns_reads_as_unknown(dao):
+    """The legacy path: NULL means nobody asked, not that reads were denied.
+
+    Reporting None as False would tell an analyst a recording was taken
+    blind when in truth it was taken before the column existed, which is
+    exactly the kind of confident wrong statement the band rule avoids.
+    """
+    rid = dao.create_recording(1000, "p.exe", 0)
+    # Write the row the way a pre-column build would have.
+    dao.conn.execute(
+        "INSERT INTO process_snapshot"
+        "(recording_id, ts_us, pid, wset_bytes, priv_bytes, thread_count) "
+        "VALUES (?, ?, ?, ?, ?, ?)", (rid, 1_000, 1000, 1, 1, 1))
+    state = dao.state_at(rid, 1_000)
+    assert state.can_read is None and state.created_ft is None
+    assert state.can_read is not False
+
+
+def test_instance_changes_finds_a_reused_pid(dao):
+    """The sampler opens a fresh handle each time, so this can really happen."""
+    rid = dao.create_recording(1000, "p.exe", 0)
+    for ts, created in ((1_000, 111), (2_000, 111), (3_000, 222), (4_000, 222)):
+        dao.add_sample(rid, ts, ProcState(ts, 1000, 1, 1, 1, created_ft=created), [])
+    assert dao.instance_changes(rid) == [3_000]
+
+
+def test_instance_changes_is_empty_for_one_instance(dao):
+    rid = dao.create_recording(1000, "p.exe", 0)
+    for ts in (1_000, 2_000, 3_000):
+        dao.add_sample(rid, ts, ProcState(ts, 1000, 1, 1, 1, created_ft=111), [])
+    assert dao.instance_changes(rid) == []
+
+
+def test_instance_changes_ignores_samples_with_no_identity(dao):
+    """An older recording has no creation times, which is not a change."""
+    rid = dao.create_recording(1000, "p.exe", 0)
+    for ts in (1_000, 2_000):
+        dao.add_sample(rid, ts, ProcState(ts, 1000, 1, 1, 1), [])
+    assert dao.instance_changes(rid) == []

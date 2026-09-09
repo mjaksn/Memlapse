@@ -61,7 +61,7 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 373 passed with 100 percent line and branch
+(2026-09-06); the test run is 385 passed with 100 percent line and branch
 coverage (2026-09-09).
 
 ## Conventions
@@ -137,6 +137,21 @@ coverage (2026-09-09).
   the first call and returns an empty list, which is why `regions()` asks
   `has_exited()` before handing one back and raises instead: a live process
   always has mapped memory, so an empty map is a refusal, never an answer.
+- The recorder has no equivalent of that guard. It opens a fresh handle every
+  tick, so nothing stops the pid being reused between two samples and a
+  stranger's map being appended to the same recording. That is why every
+  sample stores `created_ft`; `Dao.instance_changes` reports where it changed.
+- A band is a claim about one sample, so live mode and playback should reach
+  the same band for the same moment, and everything else a recording knows
+  belongs beside the band rather than inside it. The one live departure, the
+  sticky rewrite flag, is a stand-in for having no timeline to scrub. Read
+  `docs/ARCHITECTURE.md`, "A band is about a moment", before changing anything
+  that makes the two modes score differently.
+- Some facts have to be recorded because no later pass can recover them:
+  `process_snapshot.can_read` and `.created_ft` are properties of the sample,
+  not of the process. Both are nullable and NULL means "not recorded", which
+  is not false and not zero; an older recording answers "nobody asked", and
+  reporting that as a denial is a bug.
 - Recordings are stored per user under `%LOCALAPPDATA%\Memlapse\memlapse.db`. Recordings
   made under the old name live in a `MemDo` folder beside it and are not picked up.
 - `git grep -P` handles Unicode escapes; plain `grep -P` on this machine does not, and

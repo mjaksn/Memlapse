@@ -175,3 +175,56 @@ def test_sample_records_thread_start_addresses(qapp, tmp_db, monkeypatch):
         assert [tuple(r) for r in rows] == [(9, 0x7FF123)]
     finally:
         conn.close()
+
+
+# --- the sample records what only the sample can know ----------------------
+def test_a_sample_records_read_access_and_the_process_instance(qapp, tmp_db,
+                                                               monkeypatch):
+    """Both come from the handle that took the sample and cannot be recovered.
+
+    An empty head set on replay is ambiguous between "reads were refused" and
+    "nothing executable to read"; only can_read separates them. The creation
+    time is what lets a replay notice the pid was reused between two samples.
+    """
+    monkeypatch.setattr(region_mod, "start_addresses", lambda pid: {})
+    s = RegionSampler(os.getpid(), "me", 0.01, db_path=tmp_db)
+    s.sampled.connect(lambda *_: s.stop())
+    s.run()
+    conn = connect(tmp_db)
+    try:
+        row = conn.execute(
+            "SELECT can_read, created_ft FROM process_snapshot").fetchone()
+        assert row[0] == 1                       # our own process reads fine
+        assert row[1] > 132_000_000_000_000_000  # a real FILETIME, after 2020
+    finally:
+        conn.close()
+
+
+def test_a_sample_survives_a_process_that_will_not_say_when_it_started(
+        qapp, tmp_db, monkeypatch):
+    """Losing the map over a missing identity would throw away the reading.
+
+    creation_time() raising is what a target on its way out produces, and the
+    map taken a moment earlier is still worth keeping.
+    """
+    monkeypatch.setattr(region_mod, "start_addresses", lambda pid: {})
+    real_pm = region_mod.ProcessMemory
+
+    class NoIdentityPM(real_pm):
+        def creation_time(self):
+            raise region_mod.ProcessAccessError("gone")
+
+    monkeypatch.setattr(region_mod, "ProcessMemory", NoIdentityPM)
+    s = RegionSampler(os.getpid(), "me", 0.01, db_path=tmp_db)
+    s.sampled.connect(lambda *_: s.stop())
+    s.run()
+    conn = connect(tmp_db)
+    try:
+        row = conn.execute(
+            "SELECT can_read, created_ft FROM process_snapshot").fetchone()
+        assert row is not None                   # the sample was still written
+        assert row[0] == 1 and row[1] is None    # identity unknown, reads fine
+        assert conn.execute(
+            "SELECT COUNT(*) FROM region_snapshot").fetchone()[0] > 0
+    finally:
+        conn.close()

@@ -39,11 +39,23 @@ class RecordingRow:
 
 @dataclass(frozen=True, slots=True)
 class ProcState:
+    """One sample's process-level facts.
+
+    ``can_read`` and ``created_ft`` describe the sample rather than the
+    process: whether the handle that took it could read memory, and which
+    instance of the pid answered. Both default to ``None``, which means "not
+    recorded" and is deliberately distinct from ``False`` and from 0. A replay
+    cannot work either one out afterwards, so a recording that predates the
+    columns keeps ``None`` and callers must not read that as a denial.
+    """
+
     ts_us: int
     pid: int
     wset_bytes: int
     priv_bytes: int
     thread_count: int
+    can_read: bool | None = None
+    created_ft: int | None = None
 
 
 class Dao:
@@ -85,10 +97,13 @@ class Dao:
         heads = heads or {}
         self.conn.execute(
             "INSERT INTO process_snapshot"
-            "(recording_id, ts_us, pid, wset_bytes, priv_bytes, thread_count) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(recording_id, ts_us, pid, wset_bytes, priv_bytes, thread_count,"
+            " can_read, created_ft) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (recording_id, ts_us, state.pid, state.wset_bytes,
-             state.priv_bytes, state.thread_count),
+             state.priv_bytes, state.thread_count,
+             None if state.can_read is None else int(state.can_read),
+             state.created_ft),
         )
         for r in regions:
             digest = None
@@ -131,14 +146,48 @@ class Dao:
         return [r[0] for r in rows]
 
     def state_at(self, recording_id: int, ts_us: int) -> ProcState | None:
-        """Latest process snapshot at or before ts_us."""
+        """Latest process snapshot at or before ts_us.
+
+        ``can_read`` comes back as ``None`` for a recording written before the
+        column existed, never as ``False``: nothing was denied, nothing was
+        asked. Callers deciding what to tell an analyst have to keep the two
+        apart, so the cast below leaves ``None`` alone.
+        """
         row = self.conn.execute(
-            "SELECT ts_us, pid, wset_bytes, priv_bytes, thread_count "
+            "SELECT ts_us, pid, wset_bytes, priv_bytes, thread_count,"
+            " can_read, created_ft "
             "FROM process_snapshot WHERE recording_id=? AND ts_us<=? "
             "ORDER BY ts_us DESC LIMIT 1",
             (recording_id, ts_us),
         ).fetchone()
-        return ProcState(*row) if row else None
+        if row is None:
+            return None
+        ts, pid, wset, priv, threads, can_read, created = row
+        return ProcState(ts, pid, wset, priv, threads,
+                         None if can_read is None else bool(can_read), created)
+
+    def instance_changes(self, recording_id: int) -> list[int]:
+        """Sample timestamps where the recorded process instance changed.
+
+        The sampler opens a fresh handle every sample, so nothing stops the
+        pid being reused mid-recording and a stranger's map being appended
+        under the same recording id. The live view guards against exactly this
+        and ends the watch; a recording has no equivalent, and until the
+        creation time was stored there was no way to notice afterwards. Rows
+        with no creation time are skipped rather than treated as a change,
+        since an older recording has none anywhere.
+        """
+        rows = self.conn.execute(
+            "SELECT ts_us, created_ft FROM process_snapshot "
+            "WHERE recording_id=? AND created_ft IS NOT NULL ORDER BY ts_us",
+            (recording_id,),
+        ).fetchall()
+        changed, previous = [], None
+        for ts, created in rows:
+            if previous is not None and created != previous:
+                changed.append(ts)
+            previous = created
+        return changed
 
     def sample_at(self, recording_id: int, ts_us: int) -> int | None:
         """Timestamp of the region sample at or before ts_us, or None.
