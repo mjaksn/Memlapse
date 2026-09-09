@@ -144,10 +144,11 @@ def top_movers(
 
 
 # --- in-memory injection heuristics ----------------------------------------
-# Structural + content signals for code-injection detection, in the spirit of
-# Volatility's malfind and the "unbacked executable memory" indicator EDRs use.
-# Everything here is a pure function of a Region plus optional bytes, so it runs
-# against live samples *and* replayed recordings, and unit-tests without Win32.
+# Structural, thread, content and temporal signals for code-injection
+# detection, in the spirit of Volatility's malfind and the "unbacked
+# executable memory" indicator EDRs use. Everything here is a pure function of
+# a Region plus optional bytes, so it runs against live samples *and* replayed
+# recordings, and unit-tests without Win32.
 
 _EXEC_MASK = (
     PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY
