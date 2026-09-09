@@ -31,12 +31,12 @@ analyst scrub back to the moment the memory changed.
   private and RWX, which is what a JIT compiler leaves behind, stops at
   review. A fourth band, allowlisted, exists for a region whose every scoring
   rule an entry has excused, but nothing in the app creates an entry yet, so
-  no run of it shows that band. The score also
-  rises for a region whose code was rewritten in place, and again if its
-  entropy fell from packed to code-like, the traces an injector leaves when
-  it overwrites executable memory that already exists and when a payload
-  decrypts itself there. Both work in playback, between consecutive samples,
-  and in live mode, between one refresh and the next.
+  no run of it shows that band. The score also rises for a region whose code
+  was rewritten in place, and again if its entropy fell from packed to
+  code-like, the traces an injector leaves when it overwrites executable
+  memory that already exists and when a payload decrypts itself there. Both
+  work in playback, between consecutive samples, and in live mode, between
+  one refresh and the next.
 
 - **Dashboard**, a vivid, near-live overview tab: system RAM/swap gauges, a
   scrolling usage timeline, a heat-ranked top-process list (click to drill into

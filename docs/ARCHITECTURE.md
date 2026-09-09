@@ -168,9 +168,11 @@ Each phase is usable on its own.
 - **Phase 5, the payoff:** EtwCollector feeds thread-tagged `mem_event`s;
   filter playback to one TID.
 - **Phase 6, heuristic detection:** score each region for in-memory code
-  injection (unbacked executable memory, reflective-load PE headers, NOP sleds,
-  packing entropy) and surface it in the region view. Structural + content tiers
-  ship today; the temporal RW→RX transition detector is the next step. See
+  injection (unbacked executable memory, RWX, reflective-load PE headers, NOP
+  sleds, packing entropy, threads starting outside any image, code rewritten
+  in place and payloads that unpack themselves) and surface it in the region
+  view. The structural, thread, content and temporal tiers ship today; the
+  temporal RW→RX transition detector is the next step. See
   ["In-memory injection heuristics"](#in-memory-injection-heuristics-live-memory-malware-detection).
 
 ---
@@ -199,7 +201,7 @@ memlapse/
   collectors/
     base.py              # PollingCollector: QThread loop, latest-only delivery
     process.py           # ProcessCollector over win32/processes.py
-    region.py            # VirtualQueryEx RegionSampler (+ head bytes)
+    region.py            # VirtualQueryEx RegionSampler (+ head bytes, thread start addresses)
     system.py            # SystemCollector (psutil totals) for the dashboard
     etw.py               # pywintrace EtwCollector (Phase 5, not yet written)
   storage/
@@ -222,6 +224,7 @@ memlapse/
     privileges.py        # SeDebugPrivilege, elevation
     memory.py            # ctypes wrappers: OpenProcess, VirtualQueryEx, ReadProcessMemory
     processes.py         # ctypes wrapper: NtQuerySystemInformation process table
+    threads.py           # ctypes wrapper: NtQueryInformationThread start addresses
 tests/
 docs/
   ARCHITECTURE.md
@@ -316,9 +319,12 @@ combination is the highest-signal heuristic in this space.[^malfind]
 
 ### The scoring model
 
-`analytics.score_region(region, *, head=b"")` returns a `RegionVerdict`
-(`base_addr`, `size`, `score` 0 to 100, `reasons`, `suspicious`). Signals are
-**additive** and split into two tiers by whether they need the region's bytes:
+`analytics.score_region(region, *, head=b"", rewritten=False,
+thread_start=False, unpacked=False, allowed=())` returns a `RegionVerdict`
+(`base_addr`, `size`, `score` 0 to 100, `reasons`, `suspicious`,
+`effective_score`, `map_shape_only`, `band`). Signals are **additive** and
+split into four tiers by what each one needs, the memory map, the thread list,
+the region's bytes, or two looks in time:
 
 | Tier | Signal | Points | Needs bytes? | Technique | Rationale |
 |---|---|---:|:--:|---|---|
@@ -334,11 +340,11 @@ combination is the highest-signal heuristic in this space.[^malfind]
 | Temporal | Head entropy fell from `ENTROPY_PACKED` to `ENTROPY_CODE_MAX` = 6.5 or below (`UNPACKED_POINTS`) | +20 | yes | T1027.002 | A packed payload that decrypted itself in place; stacks with the rewrite it implies |
 
 Every reason string ends with its technique in square brackets, so the tooltip
-an analyst reads and any export of the same finding name it identically
-(RESEARCH_NOTES.md 4.4). Two signals carry none: RWX is a property of a page
-rather than a technique, and a NOP sled is a shellcode artefact ATT&CK does
-not name. Inventing an identifier for either would make the rest of the
-mapping less trustworthy, not more.
+an analyst reads names it as ATT&CK does, and any later export of the same
+finding will too (RESEARCH_NOTES.md 4.4). Two signals carry none: RWX is a
+property of a page rather than a technique, and a NOP sled is a shellcode
+artefact ATT&CK does not name. Inventing an identifier for either would make
+the rest of the mapping less trustworthy, not more.
 
 The total is capped at 100. Non-committed or non-executable regions
 short-circuit to score 0. When `head` is empty (no bytes captured, e.g. an
@@ -503,7 +509,7 @@ flowchart TD
     F --> RW["PlaybackEngine.rewritten(ts)"]
     RW --> UN["PlaybackEngine.unpacked(ts, rewritten)"]
     F --> UN
-    G --> I["RegionTableModel.set_regions(regions, heads,<br/>rewritten, thread_starts, unpacked)"]
+    G --> I["RegionTableModel.set_regions(regions, heads,<br/>rewritten, thread_starts, unpacked, allowed)"]
     H --> I
     RW --> I
     UN --> I
@@ -551,7 +557,8 @@ in the destination directory and renames onto the target, so a failure part
 way through cannot truncate a file that was already there.
 
 **Surface**, `ui/region_view.py`. `RegionTableModel` gained a **Score**
-column. On `set_regions(rows, heads)` it computes a `RegionVerdict` per row and:
+column. On `set_regions(rows, heads, rewritten, thread_starts, unpacked,
+allowed)` it computes a `RegionVerdict` per row and:
 
 - shows the numeric score (blank for benign rows),
 - tints suspicious rows via `theme.heat_color(score/100)` (green→amber→red,
@@ -666,7 +673,7 @@ detector nobody sees: a region seen rewritten stays flagged, and counted in
 the header as "rewritten while watching", until it leaves the map or the
 analyst selects a process again, which starts the history afresh.
 
-**Playback does not carry it forward, and since the calibration that shows.**
+**Playback does not carry it forward, and since the calibration, that shows.**
 `PlaybackEngine.rewritten` compares the anchored sample with the one before
 it and nothing else, which is right for a mode that can scrub: the flag
 belongs to the moment it happened, and the analyst can move to that moment.
