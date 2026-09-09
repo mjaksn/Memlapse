@@ -23,7 +23,7 @@ from dataclasses import replace
 import psutil
 from PySide6.QtCore import QThread, Signal
 
-from ..analytics import is_executable
+from ..analytics import Allowlist, is_executable
 from ..storage import connect
 from ..storage.dao import Dao, ProcState
 from ..win32.memory import ProcessAccessError, ProcessMemory
@@ -68,20 +68,27 @@ class RegionSampler(QThread):
     finished_recording = Signal(str)
 
     def __init__(self, pid: int, name: str, interval: float,
-                 db_path=None, note: str | None = None, parent=None) -> None:
+                 db_path=None, note: str | None = None,
+                 allowlist: Allowlist | None = None, parent=None) -> None:
         super().__init__(parent)
         self.pid = pid
         self.name = name
         self.interval = interval
         self.db_path = db_path
         self.note = note
+        #: The allowlist in force when Record was pressed, written once into
+        #: the recording so a replay elsewhere excuses what this session
+        #: excused. None records nothing, which a replay reads as "nobody
+        #: wrote it down" rather than as "nothing was excused".
+        self.allowlist = allowlist
         self._running = False
         self.recording_id: int | None = None
 
     def run(self) -> None:
         conn = connect(self.db_path)
         dao = Dao(conn)
-        rec_id = dao.create_recording(self.pid, self.name, _now_us(), self.note)
+        rec_id = dao.create_recording(self.pid, self.name, _now_us(),
+                                      self.note, self.allowlist)
         self.recording_id = rec_id
         self.started.emit(rec_id)
 

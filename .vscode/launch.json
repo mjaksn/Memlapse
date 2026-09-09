@@ -1,0 +1,39 @@
+{
+  // Two ways to start Memlapse, both running main.py from the repo root.
+  // See README.md, "Run".
+  //
+  // Both pin the interpreter to the .venv the README tells you to create, so
+  // a fresh clone runs without picking one first. Drop the "python" line to
+  // fall back to whichever interpreter is selected for the workspace.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Memlapse",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "program": "${workspaceFolder}/main.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    },
+    {
+      // Elevated, and the debugger cannot follow it there. The --elevate flag
+      // asks Windows for a second, elevated copy through UAC, and this process
+      // then exits with 0 immediately, so the debug session ends within a
+      // second or so and the window left on screen is attached to nothing.
+      // That is the design and not a crash: elevation cannot be granted to a
+      // process that is already running, only to a new one.
+      //
+      // To debug Memlapse with its privileges, start VS Code elevated and use
+      // the plain "Memlapse" configuration above, which inherits them.
+      "name": "Memlapse (elevated, detached)",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "program": "${workspaceFolder}/main.py",
+      "args": ["--elevate"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    }
+  ]
+}

@@ -148,6 +148,16 @@ class RegionTableModel(QAbstractTableModel):
         self._rewrites: dict[tuple[int, int, int, int], list[int]] = {}
         self._origin: int = 0
 
+    @property
+    def excused_anything(self) -> bool:
+        """True when the allowlist just used excused a rule that fired.
+
+        Not the same as the allowlist holding entries. An entry naming
+        another process, or naming a rule nothing tripped in this sample,
+        leaves every band exactly where it would have been without it.
+        """
+        return any(r.allowed for v in self._verdicts for r in v.reasons)
+
     def rowCount(self, parent=QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows)
 
@@ -302,10 +312,15 @@ class RegionTableModel(QAbstractTableModel):
 class RegionView(QWidget):
     def __init__(self, parent=None, allowlist: Allowlist | None = None) -> None:
         super().__init__(parent)
-        #: Rules excused per process. Empty until entries are stored and
-        #: loaded (ARCHITECTURE.md, "Planned: the rest of the allowlist");
-        #: an empty one scores exactly as the view did before it existed.
-        self._allowlist = allowlist or Allowlist()
+        #: Rules excused per process, as configured now. This is what live
+        #: mode scores against. A replay scores against the list stored in
+        #: the recording instead, falling back to this one only when the
+        #: recording never wrote one down.
+        # "or" would be wrong: an Allowlist with no entries is falsy, so an
+        # empty one handed in here would be swapped for a different empty
+        # one, and every later entry added to the caller's would be invisible
+        # to this view.
+        self._allowlist = Allowlist() if allowlist is None else allowlist
         self._pid: int | None = None
         self._live = True  # live -> can read bytes; playback -> cannot
         #: Creation time of the instance the current map came from. With the
@@ -506,7 +521,9 @@ class RegionView(QWidget):
                               thread_starts: set[int] | None = None,
                               unpacked: set[int] | None = None,
                               image_name: str = "",
-                              rewrites: dict[tuple[int, int, int, int], list[int]] | None = None,
+                              allowlist: Allowlist | None = None,
+                              rewrites: dict[tuple[int, int, int, int],
+                                             list[int]] | None = None,
                               origin_us: int = 0) -> None:
         """Show a map from storage. ``image_name`` is the recorded process,
         looked up in the allowlist exactly as live mode looks up the process
@@ -517,6 +534,17 @@ class RegionView(QWidget):
         history and its first sample, which the rows report beside their
         bands. They belong to the recording rather than to this moment, so
         they are the same at every seek and cost the caller nothing to pass.
+        ``allowlist`` is the list the recording was made under, which is the
+        one that scores it: open the recording anywhere and the same rules
+        are excused, which is what lets someone else check the finding. None
+        means the recording never wrote one down, and only then does the
+        currently configured list apply, as it did before recordings carried
+        one.
+
+        The test is ``is None`` and never truth. A recording that excused
+        nothing gives an Allowlist with no entries, which is falsy and still
+        governs: read for truth, it would quietly hand the replay back to
+        whatever this machine has configured.
         """
         self._pid = None
         self._live = False
@@ -526,9 +554,10 @@ class RegionView(QWidget):
         self._load_seq += 1
         self._pending = None
         self._in_flight = False
+        book = self._allowlist if allowlist is None else allowlist
         self.model.set_regions(regions, heads, rewritten, thread_starts,
                                unpacked,
-                               self._allowlist.rules_for(image_name),
+                               book.rules_for(image_name),
                                rewrites, origin_us)
         self.header.setText(header)
         self.hex.setPlainText(

@@ -25,7 +25,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import groupby
 
-from ..analytics import head_hash
+from ..analytics import Allowlist, AllowlistEntry, head_hash
 from ..model.region import Region
 
 
@@ -66,14 +66,35 @@ class Dao:
 
     # --- writes (sampler side) --------------------------------------------
     def create_recording(self, pid: int, name: str, started_us: int,
-                         note: str | None = None) -> int:
+                         note: str | None = None,
+                         allowlist: Allowlist | None = None) -> int:
+        """Open a recording, writing down the allowlist it is made under.
+
+        ``allowlist`` of None records nothing and leaves
+        ``allowlist_recorded`` NULL, which a replay reads as "nobody wrote it
+        down" and answers by scoring with whatever is in force then, exactly
+        as replays behaved before this was stored. An Allowlist holding no
+        entries is a different statement: this session excused nothing, and a
+        replay honours that rather than applying its own. The flag and the
+        entries land in one commit, so a reader never sees one without the
+        other.
+        """
         cur = self.conn.execute(
-            "INSERT INTO recording(target_pid, target_name, started_utc, note) "
-            "VALUES (?, ?, ?, ?)",
-            (pid, name, started_us, note),
+            "INSERT INTO recording"
+            "(target_pid, target_name, started_utc, note, allowlist_recorded) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (pid, name, started_us, note, None if allowlist is None else 1),
         )
+        recording_id = int(cur.lastrowid)
+        if allowlist is not None:
+            self.conn.executemany(
+                "INSERT INTO recording_allowlist"
+                "(recording_id, image_name, rule, note) VALUES (?, ?, ?, ?)",
+                [(recording_id, e.image_name, e.rule, e.note)
+                 for e in allowlist.entries],
+            )
         self.conn.commit()
-        return int(cur.lastrowid)
+        return recording_id
 
     def end_recording(self, recording_id: int, ended_us: int) -> None:
         self.conn.execute(
@@ -138,6 +159,30 @@ class Dao:
             "FROM recording ORDER BY started_utc DESC"
         ).fetchall()
         return [RecordingRow(*r) for r in rows]
+
+    def allowlist_for(self, recording_id: int) -> Allowlist | None:
+        """The allowlist this recording was made under, or None if unrecorded.
+
+        None means nobody wrote one down, which is the answer for every
+        recording made before the column existed and for a caller that passed
+        none. It is not an empty allowlist, and the difference decides how the
+        replay scores: None sends the caller back to whatever is in force now,
+        while an Allowlist with no entries says this recording excused nothing
+        and the replay should excuse nothing either.
+        """
+        row = self.conn.execute(
+            "SELECT allowlist_recorded FROM recording WHERE id=?",
+            (recording_id,),
+        ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        rows = self.conn.execute(
+            "SELECT image_name, rule, note FROM recording_allowlist "
+            "WHERE recording_id=? ORDER BY id",
+            (recording_id,),
+        ).fetchall()
+        return Allowlist([AllowlistEntry(image, rule, note)
+                          for image, rule, note in rows])
 
     def sample_times(self, recording_id: int) -> list[int]:
         """Ordered list of every sample's timestamp, drives the timeline."""

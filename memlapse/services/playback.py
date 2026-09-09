@@ -15,8 +15,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from ..analytics import (
-    EXEC_MASK, region_identity, regions_with_thread_starts, rewritten_regions,
-    unpacked_regions,
+    Allowlist, EXEC_MASK, region_identity, regions_with_thread_starts,
+    rewritten_regions, unpacked_regions,
 )
 from ..storage import connect
 from ..storage.dao import Dao, ProcState, RecordingRow
@@ -72,6 +72,13 @@ class PlaybackEngine:
         #: rather than folded into one, since a band answers for the sample
         #: the analyst is standing on and this answers for the whole run.
         self.rewrites: dict[tuple[int, int, int, int], list[int]] = {}
+        #: The allowlist the recording was made under, or None when the
+        #: recording never wrote one down. None is not an empty allowlist:
+        #: it sends the caller back to whatever is in force now, which is how
+        #: every replay behaved before this was stored. Test the difference
+        #: with ``is None``, never for truth, since a recorded allowlist that
+        #: excused nothing is falsy and still governs the replay.
+        self.allowlist: Allowlist | None = None
 
     def list_recordings(self) -> list[RecordingRow]:
         return self._dao.list_recordings()
@@ -85,6 +92,7 @@ class PlaybackEngine:
              if r.id == recording_id), "")
         self.instance_changes = self._dao.instance_changes(recording_id)
         self.rewrites = self.rewrite_history(recording_id)
+        self.allowlist = self._dao.allowlist_for(recording_id)
         return self.sample_times
 
     def seek(self, ts_us: int) -> tuple[ProcState | None, list[Region]]:

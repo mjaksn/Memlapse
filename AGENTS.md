@@ -61,7 +61,7 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 414 passed with 100 percent line and branch
+(2026-09-06); the test run is 437 passed with 100 percent line and branch
 coverage (2026-09-09).
 
 ## Conventions
@@ -158,15 +158,37 @@ coverage (2026-09-09).
   outlives the allocation that held it and a pid outlives the process, so
   either mistake hands one thing's history to another, and unlike a per-sample
   flag it is then on screen at every sample of the recording.
+- `Allowlist.__bool__` says whether it holds entries, which is not whether
+  it was recorded. A recording that excused nothing gives an allowlist that
+  is falsy and still governs its replay, so every choice between a recorded
+  allowlist and the configured one is written `is None`. Written as `or`, a
+  recording that excused nothing is silently scored with the reader's own
+  list, and the bands then depend on who opened the file.
 - Some facts have to be recorded because no later pass can recover them:
   `process_snapshot.can_read` and `.created_ft` are properties of the sample,
   not of the process. Both are nullable and NULL means "not recorded", which
   is not false and not zero; an older recording answers "nobody asked", and
-  reporting that as a denial is a bug.
+  reporting that as a denial is a bug. `recording.allowlist_recorded` is the
+  third of these: zero rows in `recording_allowlist` mean "excused nothing"
+  when it is set and "nobody wrote a list down" when it is NULL, and those
+  score differently.
 - Recordings are stored per user under `%LOCALAPPDATA%\Memlapse\memlapse.db`. Recordings
   made under the old name live in a `MemDo` folder beside it and are not picked up.
 - `git grep -P` handles Unicode escapes; plain `grep -P` on this machine does not, and
   fails silently inside a pipeline.
+- The elevated editor launcher ends its own session in about a second once
+  UAC is accepted, and that is correct. `--elevate` asks Windows for a new
+  elevated process and the current one returns 0, so a debugger is left with
+  nothing attached and the run reads as a crash. Decline the UAC prompt and
+  `relaunch_as_admin` returns False instead, whereupon `main` falls through
+  and the same process runs unelevated with the debugger still on it, so a run
+  that does not end is not a fault either. Debugging with privileges means
+  starting the editor elevated and using the plain launcher. Of the editor
+  directories only `.idea/runConfigurations/` and `.vscode/launch.json` are
+  tracked; the rest of both is per-user and ignored.
+- A PyCharm run configuration is XML, so its comments cannot contain two
+  hyphens in a row. Writing `--elevate` in one leaves a file no XML parser
+  will accept; what PyCharm itself then shows has not been checked here.
 
 ## Out of bounds
 

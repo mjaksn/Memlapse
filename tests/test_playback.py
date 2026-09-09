@@ -484,3 +484,65 @@ def test_a_restart_on_a_sample_with_no_map_still_stops_the_comparison(tmp_db):
         assert engine.rewrites == {}
     finally:
         engine.close()
+
+def test_open_loads_the_allowlist_the_recording_was_made_under(tmp_db):
+    """A replay scores with the recording's list, not the reader's.
+
+    That is what makes a recording checkable by someone else: open it on
+    another machine and the same rules are excused, whatever that machine
+    has configured.
+    """
+    from memlapse.analytics import Allowlist, AllowlistEntry, RULE_PRIVATE_EXEC
+    conn = connect(tmp_db)
+    try:
+        dao = Dao(conn)
+        rid = dao.create_recording(1, "jit.exe", 1_000, allowlist=Allowlist(
+            [AllowlistEntry("jit.exe", RULE_PRIVATE_EXEC, "JIT host")]))
+        dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 1, 1, 1), [])
+    finally:
+        conn.close()
+
+    engine = PlaybackEngine(tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.allowlist is not None
+        assert engine.allowlist.rules_for("jit.exe") == {RULE_PRIVATE_EXEC}
+    finally:
+        engine.close()
+
+
+def test_open_reports_none_when_the_recording_wrote_no_allowlist(tmp_db):
+    """Not an empty allowlist. The caller has to fall back, not excuse nothing."""
+    conn = connect(tmp_db)
+    try:
+        dao = Dao(conn)
+        rid = dao.create_recording(1, "p", 1_000)
+        dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 1, 1, 1), [])
+    finally:
+        conn.close()
+
+    engine = PlaybackEngine(tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.allowlist is None
+    finally:
+        engine.close()
+
+
+def test_open_keeps_a_recorded_empty_allowlist(tmp_db):
+    """Falsy but present, so a caller testing for truth would lose it."""
+    from memlapse.analytics import Allowlist
+    conn = connect(tmp_db)
+    try:
+        dao = Dao(conn)
+        rid = dao.create_recording(1, "p", 1_000, allowlist=Allowlist())
+        dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 1, 1, 1), [])
+    finally:
+        conn.close()
+
+    engine = PlaybackEngine(tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.allowlist is not None and not engine.allowlist
+    finally:
+        engine.close()

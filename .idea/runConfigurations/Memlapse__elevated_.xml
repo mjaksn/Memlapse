@@ -1,0 +1,35 @@
+<component name="ProjectRunConfigurationManager">
+  <!--
+    Elevated, and the debugger cannot follow it there. The elevate flag in
+    PARAMETERS below asks Windows for a second, elevated copy through UAC, and
+    this process then exits with 0 immediately, so a Debug run ends within a
+    second or so and the window left on screen is attached to nothing. That is
+    the design and not a crash: elevation cannot be granted to a process that
+    is already running, only to a new one. Prefer Run over Debug here.
+
+    To debug Memlapse with its privileges, start PyCharm elevated and use the
+    plain "Memlapse" configuration, which inherits them.
+  -->
+  <configuration default="false" name="Memlapse (elevated)" type="PythonConfigurationType" factoryName="Python">
+    <module name="Memlapse" />
+    <option name="ENV_FILES" value="" />
+    <option name="INTERPRETER_OPTIONS" value="" />
+    <option name="PARENT_ENVS" value="true" />
+    <envs>
+      <env name="PYTHONUNBUFFERED" value="1" />
+    </envs>
+    <option name="SDK_HOME" value="" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <option name="IS_MODULE_SDK" value="true" />
+    <option name="ADD_CONTENT_ROOTS" value="true" />
+    <option name="ADD_SOURCE_ROOTS" value="true" />
+    <option name="SCRIPT_NAME" value="$PROJECT_DIR$/main.py" />
+    <option name="PARAMETERS" value="--elevate" />
+    <option name="SHOW_COMMAND_LINE" value="false" />
+    <option name="EMULATE_TERMINAL" value="false" />
+    <option name="MODULE_MODE" value="false" />
+    <option name="REDIRECT_INPUT" value="false" />
+    <option name="INPUT_FILE" value="" />
+    <method v="2" />
+  </configuration>
+</component>

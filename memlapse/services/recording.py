@@ -14,17 +14,21 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, Signal
 
+from ..analytics import Allowlist
 from ..collectors import RegionSampler
 
 DEFAULT_INTERVAL = 1.0
 
-#: (pid, name, interval, db_path) -> sampler object (QThread-like: exposes
-#: started/sampled/finished_recording signals plus start/stop/wait/isRunning).
-SamplerFactory = Callable[[int, str, float, object], RegionSampler]
+#: (pid, name, interval, db_path, allowlist) -> sampler object (QThread-like:
+#: exposes started/sampled/finished_recording signals plus
+#: start/stop/wait/isRunning).
+SamplerFactory = Callable[[int, str, float, object, object], RegionSampler]
 
 
-def _default_factory(pid: int, name: str, interval: float, db_path) -> RegionSampler:
-    return RegionSampler(pid, name, interval, db_path=db_path)
+def _default_factory(pid: int, name: str, interval: float, db_path,
+                     allowlist) -> RegionSampler:
+    return RegionSampler(pid, name, interval, db_path=db_path,
+                         allowlist=allowlist)
 
 
 class RecordingManager(QObject):
@@ -43,10 +47,19 @@ class RecordingManager(QObject):
     def is_recording(self) -> bool:
         return self._sampler is not None and self._sampler.isRunning()
 
-    def start(self, pid: int, name: str, interval: float = DEFAULT_INTERVAL) -> None:
+    def start(self, pid: int, name: str, interval: float = DEFAULT_INTERVAL,
+              allowlist: Allowlist | None = None) -> None:
+        """Begin recording ``pid``, writing ``allowlist`` into the recording.
+
+        Passing None records no allowlist at all, which a replay reads as
+        "nobody wrote one down" and answers by scoring with whatever is in
+        force then. An empty Allowlist is the stronger statement that nothing
+        was excused, and a replay honours it.
+        """
         if self.is_recording:
             return
-        sampler = self._sampler_factory(pid, name, interval, self.db_path)
+        sampler = self._sampler_factory(pid, name, interval, self.db_path,
+                                        allowlist)
         sampler.started.connect(self.started)
         sampler.sampled.connect(self.sampled)
         sampler.finished_recording.connect(self._on_finished)
