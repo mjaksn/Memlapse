@@ -389,11 +389,20 @@ class PlaybackEngine(QObject):
         sample, not the ones its predecessor made. Resolved against the
         anchored sample rather than the raw time, because a seek between two
         samples shows the earlier one.
+
+        Empty when the pid was reused between the anchor and the time asked
+        about. The anchor comes from region_snapshot and a restart from
+        process_snapshot, so a reuse recorded on a sample with no map leaves
+        the anchor sitting in the process that is gone, and its history would
+        be shown beside the new process's state. :meth:`rewritten` refuses the
+        same mismatch between a pair of samples.
         """
         if self.recording_id is None:
             return {}
         anchor = self._dao.sample_at(self.recording_id, ts_us)
         if anchor is None:
+            return {}
+        if any(anchor < ts <= ts_us for ts in self.instance_changes):
             return {}
         found: dict[tuple[int, int, int, int], list[int]] = {}
         for identity, runs in self._spells.items():

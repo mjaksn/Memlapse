@@ -954,3 +954,36 @@ def test_a_failed_walk_is_let_go_of_too(tmp_db):
         assert engine._worker is None
     finally:
         engine.close()
+
+
+def test_a_reuse_with_no_map_does_not_show_the_old_history(tmp_db):
+    """The anchor can be older than the process being asked about.
+
+    An anchor comes from region_snapshot and a restart from
+    process_snapshot, so a reuse recorded on a sample with no map leaves the
+    anchor sitting in the process that is gone. The state line says the new
+    process while the history would answer for the old one, which is the
+    mismatch `rewritten` already refuses between a pair of samples.
+    """
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 1, 1, 1, created_ft=111),
+                   [EXEC_REGION], {EXEC_REGION.base_addr: b"aaa"})
+    dao.add_sample(rid, 2_000, ProcState(2_000, 1000, 1, 1, 1, created_ft=111),
+                   [EXEC_REGION], {EXEC_REGION.base_addr: b"bbb"})   # rewrite
+    # The reuse is noticed on a sample that carries no regions at all.
+    dao.add_sample(rid, 3_000, ProcState(3_000, 1000, 1, 1, 1, created_ft=222),
+                   [])
+    conn.close()
+
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.instance_changes == [3_000]
+        assert engine.rewrites_at(2_000) == {EXEC_IDENTITY: [2_000]}
+        # At and after the reuse the anchor is still 2_000, in the process
+        # that no longer exists.
+        assert engine.rewrites_at(3_000) == {}
+    finally:
+        engine.close()
