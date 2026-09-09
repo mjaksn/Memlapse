@@ -42,6 +42,7 @@ from ..analytics import (
 )
 from ..collectors.region import read_heads
 from ..model.region import Region
+from ..services import describe_rewrites
 from ..win32.memory import ProcessAccessError, ProcessMemory
 from ..win32.threads import start_addresses
 from .hexdump import hexdump
@@ -138,6 +139,13 @@ class RegionTableModel(QAbstractTableModel):
         #: having fired and found nothing. The held-back tooltip needs the
         #: difference; nothing else does.
         self._read: set[int] = set()
+        #: Every rewrite the open recording holds, base address to the times
+        #: of it, and the recording's first sample to read them against. Empty
+        #: in live mode, which knows only the refresh it is on and the one
+        #: before it. This never reaches a score: it is what the recording
+        #: knows, shown beside the band rather than folded into it.
+        self._rewrites: dict[int, list[int]] = {}
+        self._origin: int = 0
 
     def rowCount(self, parent=QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows)
@@ -164,50 +172,76 @@ class RegionTableModel(QAbstractTableModel):
             )[col]
         if role == Qt.TextAlignmentRole and col in (1, 5):
             return int(Qt.AlignRight | Qt.AlignVCenter)
-        # Suspicious rows get a heat-tinted background and a reason tooltip.
-        if verdict.suspicious:
-            if role == Qt.BackgroundRole:
-                if verdict.band == ALLOWLISTED:
-                    # Deliberately not a heat colour. The row stays, and the
-                    # score with it, but nothing here is asking to be read.
-                    return QColor(128, 128, 128, 60)
-                red, green, blue = heat_color(verdict.effective_score / 100.0)
-                return QColor(red, green, blue, 110)  # translucent over dark theme
-            if role == Qt.ToolTipRole:
-                # Band first: the number alone does not say what to do with it.
-                tip = (f"{verdict.band}: " + "; ".join(
-                    f"{r.text} (allowlisted)" if r.allowed else r.text
-                    for r in verdict.reasons))
-                # A row can now show a top-band number in the review band,
-                # which looks like a bug unless the row says why. There are
-                # three ways to get here and they are not the same news: a
-                # signal was excused, no signal was found, or nothing could
-                # be looked at. Only the middle one is evidence of calm.
-                if (verdict.map_shape_only
-                        and verdict.effective_score >= LIKELY_SCORE):
-                    excused = any(x.allowed and x.rule not in MAP_SHAPE_RULES
-                                  for x in verdict.reasons)
-                    if excused:
-                        tip += ("; held at review: the signals from outside "
-                                "the map are allowlisted here, so only the "
-                                "shape of it still counts")
-                    elif r.base_addr in self._read:
-                        tip += ("; held at review: nothing here but the shape "
-                                "of the map, which is what a JIT compiler "
-                                "leaves too")
-                    else:
-                        tip += ("; held at review: no bytes could be read "
-                                "here, so nothing but the map and the thread "
-                                "list had anything to say")
-                return tip
+        if role == Qt.ToolTipRole:
+            return self._tooltip(r, verdict)
+        # Suspicious rows get a heat-tinted background.
+        if verdict.suspicious and role == Qt.BackgroundRole:
+            if verdict.band == ALLOWLISTED:
+                # Deliberately not a heat colour. The row stays, and the
+                # score with it, but nothing here is asking to be read.
+                return QColor(128, 128, 128, 60)
+            red, green, blue = heat_color(verdict.effective_score / 100.0)
+            return QColor(red, green, blue, 110)  # translucent over dark theme
         return None
+
+    def _tooltip(self, region: Region, verdict: RegionVerdict) -> str | None:
+        """What the row has to say, which is not only what it scored.
+
+        Two things, and either can be absent. The verdict speaks for the
+        sample the analyst is standing on: the band and the reasons that
+        reached it. The history speaks for the recording, and it is here
+        because the sample alone can mislead. A region rewritten four minutes
+        ago is quiet now, so it scores nothing now, and a row that says
+        nothing reads as a row with nothing to say. That is exactly the
+        region worth scrubbing back to, and only a recording can point at it.
+
+        The history never moves the score. See ARCHITECTURE.md, "A band is
+        about a moment": what the recording knows goes beside the band, or a
+        replay would be capped at what a watch could have seen.
+        """
+        parts: list[str] = []
+        if verdict.suspicious:
+            # Band first: the number alone does not say what to do with it.
+            tip = (f"{verdict.band}: " + "; ".join(
+                f"{r.text} (allowlisted)" if r.allowed else r.text
+                for r in verdict.reasons))
+            # A row can show a top-band number in the review band, which
+            # looks like a bug unless the row says why. There are three ways
+            # to get here and they are not the same news: a signal was
+            # excused, no signal was found, or nothing could be looked at.
+            # Only the middle one is evidence of calm, and the history below
+            # can take even that away.
+            if (verdict.map_shape_only
+                    and verdict.effective_score >= LIKELY_SCORE):
+                excused = any(x.allowed and x.rule not in MAP_SHAPE_RULES
+                              for x in verdict.reasons)
+                if excused:
+                    tip += ("; held at review: the signals from outside "
+                            "the map are allowlisted here, so only the "
+                            "shape of it still counts")
+                elif region.base_addr in self._read:
+                    tip += ("; held at review: nothing here but the shape "
+                            "of the map, which is what a JIT compiler "
+                            "leaves too")
+                else:
+                    tip += ("; held at review: no bytes could be read "
+                            "here, so nothing but the map and the thread "
+                            "list had anything to say")
+            parts.append(tip)
+        history = describe_rewrites(self._rewrites.get(region.base_addr, ()),
+                                    self._origin)
+        if history:
+            parts.append(history)
+        return "; ".join(parts) or None
 
     def set_regions(self, rows: list[Region],
                     heads: dict[int, bytes] | None = None,
                     rewritten: set[int] | None = None,
                     thread_starts: set[int] | None = None,
                     unpacked: set[int] | None = None,
-                    allowed: Collection[str] = ()) -> None:
+                    allowed: Collection[str] = (),
+                    rewrites: dict[int, list[int]] | None = None,
+                    origin_us: int = 0) -> None:
         """Replace the rows and score each one.
 
         ``heads`` carries the head bytes by base address (read live, or
@@ -220,6 +254,12 @@ class RegionTableModel(QAbstractTableModel):
         these regions belong to, which the caller looks up; the model is
         handed the ids rather than the allowlist so it stays ignorant of what
         an entry is keyed on.
+
+        ``rewrites`` is every rewrite the open recording holds and
+        ``origin_us`` its first sample, which together make the tooltip line
+        about the whole run. Both are playback's to pass and live mode leaves
+        them out, since a watch has no run to look back over. Neither reaches
+        a score.
         """
         heads = heads or {}
         rewritten = rewritten or set()
@@ -228,6 +268,8 @@ class RegionTableModel(QAbstractTableModel):
         self.beginResetModel()
         self._rows = rows
         self._read = set(heads)
+        self._rewrites = rewrites or {}
+        self._origin = origin_us
         self._verdicts = [
             score_region(r, head=heads.get(r.base_addr, b""),
                          rewritten=r.base_addr in rewritten,
@@ -460,11 +502,18 @@ class RegionView(QWidget):
                               rewritten: set[int] | None = None,
                               thread_starts: set[int] | None = None,
                               unpacked: set[int] | None = None,
-                              image_name: str = "") -> None:
+                              image_name: str = "",
+                              rewrites: dict[int, list[int]] | None = None,
+                              origin_us: int = 0) -> None:
         """Show a map from storage. ``image_name`` is the recorded process,
         looked up in the allowlist exactly as live mode looks up the process
         it is watching: an entry has to mean the same thing in both modes or
         a replay contradicts the watch it came from.
+
+        ``rewrites`` and ``origin_us`` are the recording's whole rewrite
+        history and its first sample, which the rows report beside their
+        bands. They belong to the recording rather than to this moment, so
+        they are the same at every seek and cost the caller nothing to pass.
         """
         self._pid = None
         self._live = False
@@ -476,7 +525,8 @@ class RegionView(QWidget):
         self._in_flight = False
         self.model.set_regions(regions, heads, rewritten, thread_starts,
                                unpacked,
-                               self._allowlist.rules_for(image_name))
+                               self._allowlist.rules_for(image_name),
+                               rewrites, origin_us)
         self.header.setText(header)
         self.hex.setPlainText(
             "(hex preview is live only; a recording keeps the first 256 bytes of "

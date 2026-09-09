@@ -482,3 +482,51 @@ def test_playback_header_flags_a_pid_reused_mid_recording(main_window):
     assert "pid reused" not in win.region_view.header.text()   # before the change
     win._on_seek(2_000)
     assert "pid reused during this recording" in win.region_view.header.text()
+
+
+# --- the recording's rewrites reach both places that show them --------------
+def _seed_rewrite(db, first_us=5_000_000, gap_us=251_000_000):
+    """A recording of one executable region whose bytes change once."""
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region)
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    conn = connect(db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    for ts, head in ((first_us, b"aaa"), (first_us + gap_us, b"bbb")):
+        dao.add_sample(rid, ts, ProcState(ts, 1000, 100, 50, 3), [region],
+                       {0x40000: head})
+    dao.end_recording(rid, first_us + gap_us + 1)
+    conn.close()
+    return rid
+
+
+def test_opening_a_recording_marks_the_timeline(main_window):
+    """The scrubbing half: a tick where the analyst would want to be.
+
+    The mark is an index into the sample times, so this also pins the order
+    the window sets the two in. Setting the times clears the marks, so marking
+    first would leave the timeline blank.
+    """
+    win, db = main_window
+    rid = _seed_rewrite(db)
+    win._open_recording(rid)
+    assert win.timeline.slider._marks == [1]       # the second sample
+
+
+def test_a_replayed_row_reports_the_whole_run(main_window):
+    """The reading half, end to end through the window.
+
+    The engine computes the history on open, the window hands it to the view
+    with the recording's first sample, and the row says what it found. Any of
+    the three missing leaves a row that says nothing about a change the
+    recording watched happen.
+    """
+    from PySide6.QtCore import Qt
+    win, db = main_window
+    rid = _seed_rewrite(db)
+    win._open_recording(rid)
+    win._on_seek(5_000_000)          # the first sample, before the rewrite
+    tip = win.region_view.model.data(
+        win.region_view.model.index(0, 0), Qt.ToolTipRole)
+    assert "rewritten once in this recording, at 00:04:11" in tip

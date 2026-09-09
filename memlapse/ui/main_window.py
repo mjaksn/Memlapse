@@ -267,6 +267,10 @@ class MainWindow(QMainWindow):
         self.record_action.setEnabled(False)
         self._timeline_dock.show()
         self.timeline.set_sample_times(times)
+        # After the times and never before: they are what a mark is placed
+        # against, and setting them clears whatever the last recording marked.
+        self.timeline.set_marks(sorted(
+            {ts for stamps in self.playback.rewrites.values() for ts in stamps}))
         if not times:
             self.region_view.show_recorded_regions([], "Recording has no samples.")
         self.statusBar().showMessage(
@@ -301,9 +305,13 @@ class MainWindow(QMainWindow):
             )
         else:
             header = f"Recording #{self.playback.recording_id}, no data at this time"
+        # Read against the recording's own start rather than the sample being
+        # shown, so a tooltip names a time the timeline can be scrubbed to.
+        origin = next(iter(self.playback.sample_times), 0)
         self.region_view.show_recorded_regions(regions, header, heads, rewritten,
                                                thread_starts, unpacked,
-                                               self.playback.target_name)
+                                               self.playback.target_name,
+                                               self.playback.rewrites, origin)
 
     # --- shutdown ---------------------------------------------------------
     def closeEvent(self, event) -> None:
