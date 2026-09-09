@@ -35,7 +35,8 @@ from PySide6.QtWidgets import (
 )
 
 from ..analytics import (
-    ALLOWLISTED, Allowlist, RULE_IMAGE_REWRITTEN, RULE_REWRITTEN,
+    ALLOWLISTED, Allowlist, LIKELY_SCORE, MAP_SHAPE_RULES,
+    RULE_IMAGE_REWRITTEN, RULE_REWRITTEN,
     RegionVerdict, regions_with_thread_starts, rewritten_regions, score_region,
     unpacked_regions,
 )
@@ -55,8 +56,11 @@ HEX_PREVIEW_BYTES = 512
 REGION_DUMP_MAX = 16 * 1024 * 1024
 
 #: How often the live map is re-enumerated while the view is on screen. Matches
-#: the recorder's default one second cadence, so what the live detector shows
-#: is what a recording of the same process would replay.
+#: the recorder's default one second cadence, so the live detector sees the
+#: same moments a recording of the same process captures. It does not follow
+#: that the two band a moment alike: live carries a rewrite forward and
+#: playback does not, which ARCHITECTURE.md records under the content-change
+#: detector.
 LIVE_REFRESH_MS = 1000
 
 
@@ -128,6 +132,12 @@ class RegionTableModel(QAbstractTableModel):
         super().__init__(parent)
         self._rows: list[Region] = []
         self._verdicts: list[RegionVerdict] = []
+        #: Base addresses whose head bytes were available when the rows were
+        #: scored. A region missing from this set was never read, live or in
+        #: the recording, so its content rules could not fire rather than
+        #: having fired and found nothing. The held-back tooltip needs the
+        #: difference; nothing else does.
+        self._read: set[int] = set()
 
     def rowCount(self, parent=QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows)
@@ -165,9 +175,31 @@ class RegionTableModel(QAbstractTableModel):
                 return QColor(red, green, blue, 110)  # translucent over dark theme
             if role == Qt.ToolTipRole:
                 # Band first: the number alone does not say what to do with it.
-                return (f"{verdict.band}: " + "; ".join(
+                tip = (f"{verdict.band}: " + "; ".join(
                     f"{r.text} (allowlisted)" if r.allowed else r.text
                     for r in verdict.reasons))
+                # A row can now show a top-band number in the review band,
+                # which looks like a bug unless the row says why. There are
+                # three ways to get here and they are not the same news: a
+                # signal was excused, no signal was found, or nothing could
+                # be looked at. Only the middle one is evidence of calm.
+                if (verdict.map_shape_only
+                        and verdict.effective_score >= LIKELY_SCORE):
+                    excused = any(x.allowed and x.rule not in MAP_SHAPE_RULES
+                                  for x in verdict.reasons)
+                    if excused:
+                        tip += ("; held at review: the signals from outside "
+                                "the map are allowlisted here, so only the "
+                                "shape of it still counts")
+                    elif r.base_addr in self._read:
+                        tip += ("; held at review: nothing here but the shape "
+                                "of the map, which is what a JIT compiler "
+                                "leaves too")
+                    else:
+                        tip += ("; held at review: no bytes could be read "
+                                "here, so nothing but the map and the thread "
+                                "list had anything to say")
+                return tip
         return None
 
     def set_regions(self, rows: list[Region],
@@ -195,6 +227,7 @@ class RegionTableModel(QAbstractTableModel):
         unpacked = unpacked or set()
         self.beginResetModel()
         self._rows = rows
+        self._read = set(heads)
         self._verdicts = [
             score_region(r, head=heads.get(r.base_addr, b""),
                          rewritten=r.base_addr in rewritten,
@@ -224,7 +257,8 @@ class RegionTableModel(QAbstractTableModel):
 class RegionView(QWidget):
     def __init__(self, parent=None, allowlist: Allowlist | None = None) -> None:
         super().__init__(parent)
-        #: Rules excused per process. Empty until PR 2 loads saved entries;
+        #: Rules excused per process. Empty until entries are stored and
+        #: loaded (ARCHITECTURE.md, "Planned: the rest of the allowlist");
         #: an empty one scores exactly as the view did before it existed.
         self._allowlist = allowlist or Allowlist()
         self._pid: int | None = None
@@ -416,7 +450,13 @@ class RegionView(QWidget):
                               heads: dict[int, bytes] | None = None,
                               rewritten: set[int] | None = None,
                               thread_starts: set[int] | None = None,
-                              unpacked: set[int] | None = None) -> None:
+                              unpacked: set[int] | None = None,
+                              image_name: str = "") -> None:
+        """Show a map from storage. ``image_name`` is the recorded process,
+        looked up in the allowlist exactly as live mode looks up the process
+        it is watching: an entry has to mean the same thing in both modes or
+        a replay contradicts the watch it came from.
+        """
         self._pid = None
         self._live = False
         # Invalidate any in-flight live enumeration so it can't overwrite the
@@ -426,7 +466,8 @@ class RegionView(QWidget):
         self._pending = None
         self._in_flight = False
         self.model.set_regions(regions, heads, rewritten, thread_starts,
-                               unpacked)
+                               unpacked,
+                               self._allowlist.rules_for(image_name))
         self.header.setText(header)
         self.hex.setPlainText(
             "(hex preview is live only; a recording keeps the first 256 bytes of "

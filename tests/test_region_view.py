@@ -273,6 +273,13 @@ def _exec_private(base=0x40000):
     return Region(base, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
 
 
+def _exec_private_rwx(base=0x40000):
+    """50 + 25 = 75 on the map alone, which is where the band rule bites."""
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READWRITE, Region)
+    return Region(base, 4096, MEM_COMMIT, PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
+
+
 def test_region_model_rewritten_adds_points(rmodel):
     from PySide6.QtCore import Qt
     rmodel.set_regions([_exec_private()], None, {0x40000})
@@ -810,6 +817,142 @@ def test_watching_another_process_compares_it_with_itself(qtbot, live_view):
     _wait_load(qtbot, v)
     assert "has exited" not in v.header.text()
     assert v._created == 9999
+
+
+# --- a held-back row says why ------------------------------------------------
+def test_a_row_held_back_by_the_band_rule_says_so(rmodel):
+    """The Score column shows 75 and the band says review. Explain that."""
+    from PySide6.QtCore import Qt
+    region = _exec_private_rwx()
+    rmodel.set_regions([region], None)
+    assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == "75"
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert tip.startswith("review: ")
+    assert "held at review" in tip
+
+
+def test_a_row_that_earned_its_band_says_nothing_extra(rmodel):
+    """The note belongs only where the number and the band disagree."""
+    from PySide6.QtCore import Qt
+    region = _exec_private_rwx()
+    heads = {region.base_addr: b"MZ"}
+    rmodel.set_regions([region], heads)
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert tip.startswith("likely injection: ")
+    assert "held at review" not in tip
+
+
+def test_a_low_scoring_shape_only_row_says_nothing_extra(rmodel):
+    """Nothing was held back from a region that never reached the top."""
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import MEM_COMMIT, MEM_MAPPED, PAGE_EXECUTE_READ, Region
+    region = Region(0x50000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_MAPPED)
+    rmodel.set_regions([region], None)
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert tip.startswith("review: ")       # mapped exec alone is 30
+    assert "held at review" not in tip
+
+
+def test_the_held_back_note_keys_on_the_points_that_are_left(rmodel):
+    """The note must not fire on a row the allowlist already brought down.
+
+    Every other tooltip test runs with an empty allowlist, where score and
+    effective_score are equal and nothing tells the two apart. Excusing the
+    only non-map rule leaves a 50-point row that no rule held back: saying
+    it was held back would be a lie about a row nobody capped.
+    """
+    from PySide6.QtCore import Qt
+    from memlapse.analytics import RULE_PE_HEADER, RULE_RWX
+    region = _exec_private_rwx()
+    heads = {region.base_addr: b"MZ"}
+    rmodel.set_regions([region], heads,
+                       allowed={RULE_PE_HEADER, RULE_RWX})
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == "95"   # raw
+    assert tip.startswith("review: ")            # 50 left, under the floor
+    assert "held at review" not in tip
+
+
+# --- a held-back row distinguishes 'found nothing' from 'could not look' ----
+def test_a_held_back_row_that_was_read_says_the_map_was_the_whole_case(rmodel):
+    from PySide6.QtCore import Qt
+    region = _exec_private_rwx()
+    rmodel.set_regions([region], {region.base_addr: bytes(64)})
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert "nothing here but the shape of the map" in tip
+    assert "no bytes could be read" not in tip
+
+
+def test_a_held_back_row_with_no_head_says_nothing_could_be_read(rmodel):
+    """An unelevated target denies PROCESS_VM_READ and no head arrives.
+
+    The row is held back either way, but the reason differs and only one of
+    them is evidence. Claiming the content rules came back clean when no
+    byte was ever read is the kind of thing an analyst would act on.
+    """
+    from PySide6.QtCore import Qt
+    region = _exec_private_rwx()
+    rmodel.set_regions([region], None)          # no heads at all
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert "no bytes could be read" in tip
+    assert "nothing here but the shape of the map" not in tip
+
+
+def test_the_read_flag_is_per_region_not_per_refresh(rmodel):
+    """One region read and one not, in the same call, must read differently.
+
+    A read can fail for a single region: it goes away between the
+    VirtualQueryEx walk and the read, or its pages are inaccessible while the
+    rest of the process reads fine. An all-or-nothing flag would tell the
+    analyst the content rules came back clean on bytes nobody fetched.
+    """
+    from PySide6.QtCore import Qt
+    read = _exec_private_rwx(0x40000)
+    unread = _exec_private_rwx(0x50000)
+    rmodel.set_regions([read, unread], {read.base_addr: bytes(64)})
+    first = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    second = rmodel.data(rmodel.index(1, 0), Qt.ToolTipRole)
+    assert "nothing here but the shape of the map" in first
+    assert "no bytes could be read" in second
+
+
+def test_an_excused_signal_is_not_reported_as_an_absent_one(rmodel):
+    """Held back because a rule was allowlisted, not because nothing fired.
+
+    The row lists the PE header it found and then has to explain a review
+    band. Saying there was nothing but the map would contradict the line
+    above it in the same tooltip.
+    """
+    from PySide6.QtCore import Qt
+    from memlapse.analytics import RULE_PE_HEADER
+    region = _exec_private_rwx()
+    heads = {region.base_addr: b"MZ" + bytes(62)}
+    rmodel.set_regions([region], heads, allowed={RULE_PE_HEADER})
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert "PE header" in tip and "(allowlisted)" in tip
+    assert "are allowlisted here" in tip
+    assert "nothing here but the shape of the map" not in tip
+    assert "no bytes could be read" not in tip
+
+
+# --- playback scores against the same entries as live ----------------------
+def test_playback_applies_the_allowlist_like_live_does(qtbot):
+    """A replay of a watch has to reach the watch's verdict."""
+    from PySide6.QtCore import Qt
+    from memlapse.analytics import (
+        Allowlist, AllowlistEntry, RULE_PRIVATE_EXEC, RULE_RWX)
+    book = Allowlist([AllowlistEntry("jit.exe", rule, "JIT host")
+                      for rule in (RULE_PRIVATE_EXEC, RULE_RWX)])
+    v = RegionView(allowlist=book)
+    qtbot.addWidget(v)
+    region = _exec_private_rwx()
+    v.show_recorded_regions([region], "Recording #1", image_name="jit.exe")
+    assert v.model.data(v.model.index(0, 0), Qt.ToolTipRole).startswith(
+        "allowlisted: ")
+    # and a recording of a process no entry names is untouched
+    v.show_recorded_regions([region], "Recording #2", image_name="other.exe")
+    tip = v.model.data(v.model.index(0, 0), Qt.ToolTipRole)
+    assert tip.startswith("review: ") and "(allowlisted)" not in tip
 
 
 # --- the allowlist: the row and the score stay, the verdict goes -----------

@@ -529,9 +529,13 @@ Response" [V, p. 458, p. 486]. Memlapse had no threshold at all in the code:
 every non-zero score was tinted alike, so nothing told an analyst which of
 them was worth a second look. A three-band display (with 30 as the floor of
 "review") costs nothing and matches the additive scale already in use.
-**Shipped:** `RegionVerdict.band` returns low, review or likely injection from
-`REVIEW_SCORE` (30) and `LIKELY_SCORE` (75), and the band leads the region
-tooltip.
+**Shipped:** `RegionVerdict.band` returns low, review, likely injection or
+allowlisted from `REVIEW_SCORE` (30) and `LIKELY_SCORE` (75), and the band
+leads the region tooltip. The top band asks for one thing beyond the points:
+a region whose whole case is the shape of the map, private or mapped plus
+RWX, stops at review however high it scores, because the map cannot tell a
+JIT arena from a payload and on an ordinary machine it is nearly always the
+former. See ARCHITECTURE.md for the survey that settled it.
 
 **Separate confidence from severity. New.** Impact "is initially Confidence *
 Severity / 100" [V, p. 513]; severity is a property of the threat type,
@@ -628,16 +632,29 @@ region scorer is the cheap version of this.
 enable toggle, a "Likelihood (Threshold)" slider ("For a detection that falls
 below the threshold, the system discards the suspicious traffic event") and
 its own exclusion lists, with a distinction between static lists and groups
-evaluated at run time [V, p. 411 to 417]. Memlapse has one global pair of
-thresholds. Per-heuristic thresholds, and exclusions that can be a predicate
-(image name pattern, signer) rather than a PID, would let a user exempt the
-CLR from the private-executable rule without exempting it from the `MZ` rule.
+evaluated at run time [V, p. 411 to 417].
+**Shipped, in part.** The per-heuristic exclusion is the JIT allowlist: an
+entry names one rule id, so exempting a host from `private-exec` and `rwx`
+leaves the `MZ` rule counting, which is exactly the case described here. The
+key is still an image name rather than a predicate over the signer, and the
+thresholds themselves are still one global pair, though the top band now
+asks for a signal from outside the memory map on top of `LIKELY_SCORE`
+(ARCHITECTURE.md). Per-heuristic thresholds remain unbuilt.
 
 **Allowlisting is audited and reversible. Refines.** Suppressing a verdict
 logs the override "for auditing purposes", emits a new Uninspected event, and
-removing the entry re-enables analysis [V, p. 447, p. 453]. Any Memlapse
-allowlist should be keyed on something durable (image path plus publisher, or
-head hash), written to the recording, and shown rather than applied silently.
+removing the entry re-enables analysis [V, p. 447, p. 453].
+**Shipped, in part.** Of the three properties the source describes, two are
+in. Suppression is **shown rather than silent**: the row stays, the raw score
+stays, and the excused rule is marked "(allowlisted)" in the tooltip. It is
+**reversible**, with nothing to replay, since a score is the sum of its
+reasons and an excused rule is subtracted rather than erased. Playback looks
+an entry up the same way the live view does, so an entry means the same thing
+in a replay as in the watch that made it. The third, an **audit** of the
+override, is not: nothing records who excused what or when. Nor is the key
+durable, an image name rather than an image path plus publisher or a head
+hash, and entries are not written to the recording, so they do not survive a
+restart or travel with it.
 
 **Reputation of the backing image. New.** Reputation includes the publisher,
 whether the file is signed, the signing authority and a trust category, with

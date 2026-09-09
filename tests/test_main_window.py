@@ -116,6 +116,65 @@ def test_playback_seek_updates_view(main_window, sample_regions):
     assert "threads" in win.region_view.header.text()
 
 
+def test_playback_seek_scores_against_the_allowlist_end_to_end(main_window):
+    """The whole chain, not just the RegionView end of it.
+
+    Three links have to hold for a replay to agree with the watch it records:
+    the engine keeps the recorded image name, the window passes it to the
+    view, and the view looks it up. Testing the view alone leaves the first
+    two free to be deleted, and deleting either ships a playback that scores
+    against an empty allowlist while the live watch scores against the real
+    one.
+    """
+    from PySide6.QtCore import Qt
+    from memlapse.analytics import (
+        Allowlist, AllowlistEntry, RULE_PRIVATE_EXEC, RULE_RWX)
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READWRITE, Region)
+    win, db = main_window
+    rwx = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
+    rid = _seed(db, sample_regions=[rwx])          # _seed records "proc.exe"
+    win.region_view._allowlist = Allowlist([
+        AllowlistEntry("proc.exe", rule, "JIT host")
+        for rule in (RULE_PRIVATE_EXEC, RULE_RWX)])
+    win._open_recording(rid)
+    assert win.playback.target_name == "proc.exe"
+    win._on_seek(2_000)
+    tip = win.region_view.model.data(
+        win.region_view.model.index(0, 0), Qt.ToolTipRole)
+    assert tip.startswith("allowlisted: ")
+    # The raw number survives the suppression, as it does in live mode.
+    assert win.region_view.model.data(
+        win.region_view.model.index(0, 5), Qt.DisplayRole) == "75"
+
+
+def test_leaving_playback_restores_the_live_map_and_record(main_window):
+    """Coming back to Live must land where live mode left off.
+
+    The selection never changed, so re-picking the same row emits nothing:
+    an analyst who glances at a recording and clicks Live would otherwise be
+    stuck with a blank map and a dead Record button.
+    """
+    win, db = main_window
+    win._on_process_selected(os.getpid(), "me")
+    rid = _seed(db, sample_regions=[])
+    win._open_recording(rid)
+    assert not win.record_action.isEnabled()
+    win._enter_live_mode()
+    assert win._mode == "live"
+    assert win.record_action.isEnabled()
+    assert str(os.getpid()) in win.region_view.header.text()
+
+
+def test_leaving_playback_with_nothing_selected_prompts_for_one(main_window):
+    win, db = main_window
+    rid = _seed(db, sample_regions=[])
+    win._open_recording(rid)
+    win._enter_live_mode()
+    assert not win.record_action.isEnabled()
+    assert "Select a process" in win.region_view.header.text()
+
+
 def test_seek_before_first_sample_shows_no_data(main_window, sample_regions):
     win, db = main_window
     rid = _seed(db, sample_regions=sample_regions)

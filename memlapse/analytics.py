@@ -169,9 +169,13 @@ UNPACKED_POINTS = 20
 #: image, so a start anywhere else is the shellcode-with-a-thread case.
 THREAD_START_POINTS = 25
 
-#: Score at or above which a region is worth a second look, and the score at
-#: which it is worth acting on. Three bands rather than one threshold: the
-#: lower edge is deliberately low, because a signal that scores 30 and is
+#: Score at or above which a region is worth a second look, and the points
+#: floor for the band worth acting on. The floor is necessary and not
+#: sufficient: reaching :data:`LIKELY_SCORE` earns the top band only with a
+#: point from outside :data:`MAP_SHAPE_RULES` as well, and 50 + 25 on private
+#: RWX is exactly the case that does not qualify. See
+#: :attr:`RegionVerdict.band`, which is the only thing that decides a band.
+#: The lower edge is deliberately low, because a signal that scores 30 and is
 #: never shown as anything but a number is a signal nobody triages.
 REVIEW_SCORE = 30
 LIKELY_SCORE = 75
@@ -204,6 +208,13 @@ RULE_HIGH_ENTROPY = "high-entropy"
 RULE_UNPACKED = "unpacked"
 RULE_REWRITTEN = "rewritten"
 RULE_IMAGE_REWRITTEN = "image-rewritten"
+
+#: The rules a single VirtualQueryEx answers on its own, with no read, no
+#: thread query and no second look in time. They describe the shape of the
+#: map and nothing about what is in the memory or what it did, which is why
+#: they cannot carry a region into the top band by themselves: see
+#: :attr:`RegionVerdict.band`.
+MAP_SHAPE_RULES = frozenset({RULE_PRIVATE_EXEC, RULE_MAPPED_EXEC, RULE_RWX})
 
 #: Band for a region that scored only on rules an allowlist entry excused.
 #: Named rather than spelled out at each use, since the UI switches on it.
@@ -255,8 +266,10 @@ class Allowlist:
     """
 
     def __init__(self, entries: Collection[AllowlistEntry] = ()) -> None:
-        # Materialise first: entries may arrive as a cursor or a generator,
-        # and indexing it below would consume it.
+        #: The entries as given, kept so a caller can show what was excused
+        #: and on whose say-so rather than applying it silently. The lookup
+        #: below throws the notes away, and an allowlist nobody can read back
+        #: is the kind that quietly hides a finding.
         self.entries = tuple(entries)
         self._by_image: dict[str, frozenset[str]] = {}
         for entry in self.entries:
@@ -339,6 +352,32 @@ class RegionVerdict:
         return min(sum(r.points for r in self.reasons if not r.allowed), 100)
 
     @property
+    def map_shape_only(self) -> bool:
+        """Every rule still counting came from the memory map alone.
+
+        This is about what counts, not about what was observed. A content or
+        temporal rule that fired and was then excused by an allowlist entry
+        leaves the region map-shape-only just as surely as one that never
+        fired, because the band follows the points that are left. Read it as
+        "nothing outside the map is still counting", never as "nothing
+        outside the map was found". See :data:`MAP_SHAPE_RULES`.
+
+        It also cannot say why a rule stayed silent, and the reasons are not
+        equivalent. A head that was read and matched nothing is evidence; a
+        head that could not be read is the absence of it. Where no bytes are
+        available at all, which is an unelevated target that denies
+        ``PROCESS_VM_READ`` and any recording made against one, no content or
+        temporal rule can fire for any region. The top band is not out of
+        reach even then: :data:`RULE_THREAD_START` needs no bytes, only a
+        thread query, so private memory with a thread starting in it still
+        reaches 75 without the map carrying it. What is lost is every rule
+        that depends on the content. The caller knows whether it got bytes,
+        and the region view says so on the row.
+        """
+        counting = {r.rule for r in self.reasons if not r.allowed}
+        return bool(counting) and counting <= MAP_SHAPE_RULES
+
+    @property
     def band(self) -> str:
         """Triage band: "", "low", "review", "likely injection", "allowlisted".
 
@@ -349,13 +388,26 @@ class RegionVerdict:
         points left once the excused rules are subtracted: the row and the
         number stay, the verdict does not. Since every rule scores something,
         that is the same as every rule that fired having been excused.
+
+        The top band asks for one thing more than the points. A region whose
+        whole case is :data:`MAP_SHAPE_RULES` stops at "review" however far
+        it clears :data:`LIKELY_SCORE`, because the map alone cannot tell a
+        JIT arena from a payload: both are private, both are executable, and
+        a great many of the first exist on an ordinary machine. Reaching
+        "likely injection" takes a signal from somewhere else: bytes that
+        matched a content rule, a thread found starting in the region, or a
+        change between two looks at it. Measured on this machine on
+        2026-09-08, across the processes whose memory could be read, that is
+        the whole of the difference: every region in the top band scored on
+        nothing but private plus RWX. Where nothing can be read the top band
+        is unreachable; see :attr:`map_shape_only`.
         """
         if self.score <= 0:
             return ""
         effective = self.effective_score
         if effective == 0:
             return ALLOWLISTED
-        if effective >= LIKELY_SCORE:
+        if effective >= LIKELY_SCORE and not self.map_shape_only:
             return "likely injection"
         if effective >= REVIEW_SCORE:
             return "review"
@@ -412,6 +464,10 @@ def score_region(region: Region, *, head: bytes = b"",
     if region.protect & _WRITE_EXEC:
         fired(RULE_RWX, 25, "writable + executable (RWX)")
 
+    # Not structural, whatever its place in this function: the map does not
+    # answer it, and a thread executing in unbacked memory is the one
+    # single-snapshot signal strong enough to reach the top band on its own
+    # (see MAP_SHAPE_RULES).
     if thread_start and region.type != MEM_IMAGE:
         fired(RULE_THREAD_START, THREAD_START_POINTS,
               f"a thread starts here, in memory no image backs "

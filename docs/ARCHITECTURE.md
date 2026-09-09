@@ -325,7 +325,7 @@ combination is the highest-signal heuristic in this space.[^malfind]
 | **Structural** | Executable `MEM_PRIVATE` | +50 | no | T1055 | Unbacked executable memory, the core injection tell[^malfind] |
 | Structural | Executable `MEM_MAPPED` | +30 | no | T1055 | Possible **module stomping** (code written over a mapped file) |
 | Structural | Writable **and** executable (RWX/RWXC) | +25 | no | none | Self-modifying / stager memory; rare in benign code |
-| Structural | A thread starts in a committed, executable, non-image region (`THREAD_START_POINTS`) | +25 | no | T1055 | Code with a thread on it; every legitimate thread starts inside a mapped image |
+| **Thread** | A thread starts in a committed, executable, non-image region (`THREAD_START_POINTS`) | +25 | no | T1055 | Code with a thread on it; every legitimate thread starts inside a mapped image. Needs no bytes, but the memory map does not answer it either, which is why `MAP_SHAPE_RULES` excludes it |
 | **Content** | `MZ` header at offset 0 | +20 | yes | T1620 | PE image in memory → reflective DLL injection[^t1620] |
 | Content | NOP sled (≥ `NOP_SLED_MIN` = 16 × `0x90`) | +10 | yes | none | Classic shellcode landing zone |
 | Content | Shannon entropy ≥ `ENTROPY_PACKED` = 7.2 bits/byte | +10 | yes | T1027.002 | Packed or encrypted payload[^t1027] |
@@ -342,8 +342,9 @@ mapping less trustworthy, not more.
 
 The total is capped at 100. Non-committed or non-executable regions
 short-circuit to score 0. When `head` is empty (no bytes captured, e.g. an
-unelevated live target or a pre-feature recording) the content signals are
-skipped and only the structural tier runs.
+unelevated live target or a pre-feature recording) the content and temporal
+signals are skipped; the structural tier still runs, and so does the thread
+tier, which asks the thread list rather than the memory.
 
 Supporting helpers, all pure and unit-tested (`tests/test_analytics.py`):
 
@@ -351,22 +352,86 @@ Supporting helpers, all pure and unit-tested (`tests/test_analytics.py`):
 - `shannon_entropy(data)`, `H = -Σ pᵢ·log₂ pᵢ`, in bits/byte (0.0 to 8.0).[^entropy]
 - `longest_nop_run(data)`, longest run of `0x90`.
 
-Every scored region falls in one of three bands (tune them against a
-JIT-heavy baseline, see Limitations), and the band leads the tooltip because
-a bare number does not tell an analyst what to do with it:
+Every scored region falls in one of four bands, and the band leads the
+tooltip because a bare number does not tell an analyst what to do with it.
+The top edge was tuned against a JIT-heavy baseline on 2026-09-08 and the
+survey is below; the lower edge still rests on the reading in
+RESEARCH_NOTES.md 7.1 rather than on a measurement of this machine:
 
 | Band | Score | What it means |
 |---|---:|---|
 | low | 1 to 29 | Something tripped, not enough to spend time on. Shown and tinted all the same. |
-| review | `REVIEW_SCORE` = 30 to 74 | Worth a second look. Most JIT and EDR artefacts land here. |
-| likely injection | `LIKELY_SCORE` = 75 and above | Act on it. |
+| review | `REVIEW_SCORE` = 30 to 74, **or 75 and above when every point came from the map** | Worth a second look. Most JIT and EDR artefacts land here. |
+| likely injection | `LIKELY_SCORE` = 75 and above, **and at least one point from outside the map** | Act on it. |
+| allowlisted | any, once an entry excuses every rule that fired | Someone has vouched for this. The row and the score stay; see [the allowlist](#shipped-allowlist-semantics). |
 
 The lower edge is 30 rather than 50 on the reasoning in RESEARCH_NOTES.md
 7.1: a commercial platform treats 30 as the point where a detection is worth
 forwarding, and a band that starts at 50 leaves the single-signal findings
-between them looking identical to noise. Three bands cost nothing on an
-additive scale that already exists, and the lowest band is where an analyst
-learns what their own machine looks like.
+between them looking identical to noise. Splitting the scale three ways costs
+nothing on an additive score that already exists, and the lowest band is
+where an analyst learns what their own machine looks like. The fourth band
+is not a threshold at all: `allowlisted` is what a region gets when an entry
+excuses everything that fired, and it cuts across the other three.
+
+The top edge takes one thing more than the points. `MAP_SHAPE_RULES` names
+the three a single `VirtualQueryEx` answers on its own, `private-exec`,
+`mapped-exec` and `rwx`, and a region whose whole case is those stops at
+**review** however far it clears `LIKELY_SCORE`. The map says a page is
+private, executable and writable; it cannot say whether a JIT compiler or a
+loader put it there, and on an ordinary desktop the compilers outnumber the
+loaders by every region there is. Reaching the top band takes a signal from
+somewhere the map cannot see: bytes that matched a content rule, a thread
+found starting in the region, or a change between two looks at it. Where a
+head was read, that is a statement about the bytes: they came back and said
+nothing. Where none could be read it is not, and the difference matters.
+A target that denies `PROCESS_VM_READ`, which is any other user's process on
+an unelevated run, yields no heads at all, so **no content or temporal rule
+can fire for any of its regions**. The same holds replaying a recording made
+against one. The top band is not closed off even then: the thread tier asks
+the thread list rather than the memory, so private memory with a thread
+starting in it still reaches 75 on evidence the map did not supply. What is
+lost is everything that depends on the bytes. That is a real limit rather
+than a quiet one: the region view says which reason held a row back, and the
+live header already says "(no read access, map only)" for the process as a
+whole.
+
+This is calibration, not a new heuristic, and it was measured before it was
+written. `private-exec` (50) plus `rwx` (25) is exactly 75, exactly
+`LIKELY_SCORE`, so that pair alone used to top the scale. Enumerating every
+rule set a region can actually produce, it is the only one that reached the
+top band without a second kind of evidence. Surveyed unelevated on this
+machine on 2026-09-08, across 130 readable processes and 203,388 regions of
+which 956 scored at all, it was also the only one that did: all 343 regions
+in the top band scored on `private-exec + rwx` and nothing else. The rule
+moves every one of them to review and leaves the other 613 scoring regions
+exactly where they were.
+
+The alternatives were weighed against the same enumeration and rejected.
+Raising `LIKELY_SCORE` to 80 drops 18 rule sets out of the top band, among
+them `private-exec + thread-start`: a thread running in unbacked memory with
+no RWX anywhere, which is the remote-thread injection tell and the last
+thing to give up. Lowering the RWX points to 20 drops 8, including module
+stomping that carries a PE header. Asking for one point from outside the map
+drops exactly one, the pair itself, and nothing else at all.
+
+The table can now show a 75 in the review band, which reads as a bug unless
+the row accounts for it, so a held-back region says so in its tooltip. There
+are three ways to arrive there and they are not the same news, so the note
+says which:
+
+- `held at review: nothing here but the shape of the map, which is what a JIT
+  compiler leaves too`, when the head was read and no content rule matched.
+  This is the only one of the three that is evidence of calm.
+- `held at review: the signals from outside the map are allowlisted here, so
+  only the shape of it still counts`, when a content or temporal rule did fire
+  and an entry excused it. Without this the row would list a PE header and
+  then claim nothing but the map was found, in the same sentence.
+- `held at review: no bytes could be read here, so nothing but the map and the
+  thread list had anything to say`, when no head was available at all.
+
+The note appears only where the number and the band disagree, never on a
+region that simply scored too little.
 
 ```mermaid
 flowchart TD
@@ -402,9 +467,13 @@ flowchart TD
     R -- no --> CAP["score = min(sum, 100)"]
     RI --> CAP
     RW --> CAP
-    CAP --> AL{"points left after excusing<br/>this image's allowlisted rules?"}
+    CAP --> ANY{"scored anything<br/>at all?"}
+    ANY -- no --> Z0["no band, no tint<br/>(most regions)"]
+    ANY -- yes --> AL{"points left after excusing<br/>this image's allowlisted rules?"}
     AL -- none --> ALW["band = allowlisted<br/>(score kept, tint neutral)"]
-    AL -- some --> EFF["band from those points<br/>(the excused ones subtracted)"]
+    AL -- some --> MS{"any point from outside<br/>the memory map?"}
+    MS -- no --> RV["band = review at most<br/>(map shape alone)"]
+    MS -- yes --> EFF["band from those points<br/>(the excused ones subtracted)"]
 ```
 
 ### End-to-end data flow
@@ -530,13 +599,21 @@ NyxWatch author acknowledges apply here:
 
 1. **JIT false positives.** .NET, the JVM, and JavaScript engines (V8) legally
    allocate private, executable (sometimes RWX) memory for generated code. A
-   naive scan lights them up: measured unelevated on this machine on
-   2026-09-08, 996 regions reached the likely injection band with nothing
-   malicious running. The allowlist [below](#shipped-allowlist-semantics)
-   takes that to 33, but it is a list someone has to write and keep, and it
-   is keyed on an image name, so it excuses anything that adopts one.
-   Behavioural context would be the stronger answer, which is why the
-   thresholds above still want tuning against a JIT-heavy baseline.
+   naive scan lights them up, and this one did: measured unelevated on this
+   machine on 2026-09-08, every region that reached the likely injection band
+   with nothing malicious running got there on `private-exec + rwx` alone.
+   Two things answer that now and they answer different halves of it. The
+   [band rule](#the-scoring-model) empties the top band of the whole class,
+   without a list and without knowing which processes are JIT hosts, by
+   declining to escalate on the shape of the map alone. The
+   [allowlist](#shipped-allowlist-semantics) then moves a named host's rows
+   out of review as well, which the band rule cannot do, since a JIT arena is
+   a real observation and review is a fair place for it.
+   What neither does is tell a JIT arena from a payload on the evidence; the
+   band rule declines to guess and the allowlist is told the answer. The
+   allowlist is still a list someone has to write and keep, and it is still
+   keyed on an image name, so it excuses anything that adopts one.
+   Behavioural context remains the stronger answer.
 2. **RW→RX flip evasion.** Mature loaders allocate `PAGE_READWRITE`, write the
    payload, then `VirtualProtect` to `PAGE_EXECUTE_READ`, never holding RWX. A
    single snapshot can miss this. The **temporal** detector below closes it.
@@ -589,6 +666,22 @@ detector nobody sees: a region seen rewritten stays flagged, and counted in
 the header as "rewritten while watching", until it leaves the map or the
 analyst selects a process again, which starts the history afresh.
 
+**Playback does not carry it forward, and since the calibration that shows.**
+`PlaybackEngine.rewritten` compares the anchored sample with the one before
+it and nothing else, which is right for a mode that can scrub: the flag
+belongs to the moment it happened, and the analyst can move to that moment.
+The asymmetry is old, but it used to cost only points. A private RWX region
+scored 90 live and 75 replayed and both were "likely injection", because the
+band was a threshold on the number. Now the band turns on which rules are
+still counting, so the same region bands "likely injection" live and
+"review" at any replayed sample after the rewrite, held back as map shape
+alone. **A one-shot rewrite is therefore band-visible in a replay only at the
+sample it landed on**, and nothing on the timeline marks which sample that
+is. Carrying the flag forward in playback would fix the divergence and break
+something else, since a region rewritten once would then stay flagged for the
+rest of the recording with no way to scrub back behind it. Choosing between
+those is a design decision, not a defect to patch, and it is not made here.
+
 ### Planned: temporal RW→RX transition detector
 
 Because Memlapse *records over time*, it can do something a single-snapshot tool
@@ -631,7 +724,12 @@ commercial platform uses ([RESEARCH_NOTES.md](RESEARCH_NOTES.md) 7.1 and 7.3):
   thing an analyst reviewing a false positive needs to see.
 - **Scope it to one heuristic.** An entry names exactly one rule. Exempting a
   JIT host from `private-exec` and `rwx` leaves `pe-header`, `nop-sled` and the
-  rest counting, so a stomped CLR still reaches the review band on its content.
+  rest counting, so a stomped CLR still scores on its content and keeps its
+  row and its raw number. Note what that is worth: `pe-header` alone is 20
+  against a `REVIEW_SCORE` of 30, so an `MZ` in an excused host lands in
+  **low**, not review, and it takes a second content rule to ask for an
+  analyst's time. The entry cannot hide the row, but on one content signal it
+  does cost it a band.
 - **Make removal restore the verdict.** Nothing is recomputed or discarded, so
   deleting an entry brings the original band back with no history to replay.
   That falls out of the arithmetic rather than being a feature: a score is the
@@ -643,6 +741,19 @@ commercial platform uses ([RESEARCH_NOTES.md](RESEARCH_NOTES.md) 7.1 and 7.3):
 - **The header agrees with the bands.** The count of regions "rewritten while
   watching" comes from the verdicts rather than from the change set, so the
   header cannot announce a finding the allowlist has already excused.
+- **Both modes look an entry up the same way.** `show_recorded_regions` takes
+  the recorded process name and resolves it exactly as the live view resolves
+  the process it is watching, so an entry means the same thing in a replay as
+  in the watch that made it. Before this, a replay scored against an empty
+  allowlist while the watch scored against the real one, and the two
+  contradicted each other on the same region.
+
+  This is a claim about the allowlist and nothing wider. The two modes can
+  still band the same moment differently, for a reason that has nothing to do
+  with entries: the live view carries a rewrite forward (see [the content
+  change detector](#shipped-content-change-detector)) while playback compares
+  only the anchored sample with the one before it. Both are deliberate. The
+  consequence is recorded there.
 
 Measured on this machine on 2026-09-08, unelevated, with entries for ten
 common JIT hosts on `private-exec` and `rwx` only: regions in the likely
@@ -652,6 +763,25 @@ because it is mostly `mapped-exec` on .NET images, which is a different
 problem this does not claim to solve. The absolute counts depend on what is
 running; the before and after come from the same survey.
 
+That measurement predates the band rule above and is left as it stands,
+since it is what the allowlist does on its own. The two now divide the work,
+and the survey in the scoring section shows how. Of the 343 regions the band
+rule moves out of the top band, the allowlist goes on to quiet 281
+completely, into `allowlisted`; the remaining 62 stay in review, because
+they belong to processes nobody put on the list. The allowlist also reaches
+61 regions the band rule never touched, which were in review all along, for
+342 allowlisted in total.
+
+Neither subsumes the other, and the reason is worth keeping in view. The
+band rule needs no list, so it is the half that covers a host nobody thought
+to name. On that survey those 62 regions belonged to four processes none of
+the ten entries mention, `SourceTree.exe` and a Lenovo service accounting
+for 60 of them, and the band rule is the only thing that kept any of them
+out of the top band. The allowlist is the half that can quiet a row
+completely, which the band rule will not do, because a JIT arena really is
+private executable memory and review is an honest place to leave an
+observation nobody has vouched for.
+
 ### Planned: the rest of the allowlist
 
 - **A durable key.** Entries are keyed on the process image name, which the
@@ -659,11 +789,12 @@ running; the before and after come from the same survey.
   alone excuses anything that adopts it; an image path plus its publisher, or
   a head hash, is the intended upgrade. A PID is never a key, since Windows
   reuses those within minutes.
-- **Write it into the recording.** Entries live only in memory, so nothing
-  survives a restart and a replay elsewhere scores without them. Storing them
-  per recording is what would let a replay on another machine score the same
-  way and show a reader what was excluded, which is what makes a recording
-  evidence someone else can check.
+- **Write it into the recording.** Entries live only in memory. A replay in
+  the session that made them scores with them, since playback now looks them
+  up too, but nothing survives a restart and a replay on another machine has
+  none of them. Storing them per recording is what would let that replay
+  score the same way and show a reader what was excluded, which is what makes
+  a recording evidence someone else can check.
 - **An affordance to create one.** There is no UI to add or delete an entry
   yet; a caller builds the `Allowlist` and passes it to `RegionView`.
 
