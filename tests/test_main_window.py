@@ -568,6 +568,32 @@ def test_the_header_stays_quiet_when_the_fallback_changes_nothing(main_window):
     assert "no allowlist recorded" not in win.region_view.header.text()
 
 
+def test_the_header_stays_quiet_when_the_entry_is_for_another_process(main_window):
+    """Holding an entry is not the same as having excused something.
+
+    The recording is of proc.exe and the only entry names something else, so
+    the fallback happened and changed no band. Saying otherwise sends an
+    analyst looking for an influence on these rows that is not there.
+    """
+    from memlapse.analytics import Allowlist, AllowlistEntry, RULE_RWX
+    win, db = main_window
+    other = Allowlist([AllowlistEntry("elsewhere.exe", RULE_RWX, "not this one")])
+    verdict = _replay(win, db, recorded=None, current=other)
+    assert [r.rule for r in verdict.reasons if r.allowed] == []
+    assert "no allowlist recorded" not in win.region_view.header.text()
+
+
+def test_the_header_stays_quiet_when_the_entry_names_a_rule_that_did_not_fire(
+        main_window):
+    """The region is RWX and private, so a pe-header entry excuses nothing."""
+    from memlapse.analytics import Allowlist, AllowlistEntry, RULE_PE_HEADER
+    win, db = main_window
+    unfired = Allowlist([AllowlistEntry("proc.exe", RULE_PE_HEADER, "no MZ here")])
+    verdict = _replay(win, db, recorded=None, current=unfired)
+    assert [r.rule for r in verdict.reasons if r.allowed] == []
+    assert "no allowlist recorded" not in win.region_view.header.text()
+
+
 def test_the_header_stays_quiet_when_the_recording_brought_its_own(main_window):
     from memlapse.analytics import Allowlist, RULE_RWX
     win, db = main_window

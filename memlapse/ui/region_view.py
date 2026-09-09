@@ -139,6 +139,16 @@ class RegionTableModel(QAbstractTableModel):
         #: difference; nothing else does.
         self._read: set[int] = set()
 
+    @property
+    def excused_anything(self) -> bool:
+        """True when the allowlist just used excused a rule that fired.
+
+        Not the same as the allowlist holding entries. An entry naming
+        another process, or naming a rule nothing tripped in this sample,
+        leaves every band exactly where it would have been without it.
+        """
+        return any(r.allowed for v in self._verdicts for r in v.reasons)
+
     def rowCount(self, parent=QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows)
 

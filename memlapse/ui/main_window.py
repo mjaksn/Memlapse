@@ -306,12 +306,6 @@ class MainWindow(QMainWindow):
                 header += "  (no read access, map only)"
             if any(ts <= ts_us for ts in self.playback.instance_changes):
                 header += "  (pid reused during this recording)"
-            # Only worth saying when it changes the reading. A recording that
-            # wrote no list is scored with whatever is configured here, and
-            # if that is not empty the bands owe something to this machine
-            # rather than to the recording.
-            if self.playback.allowlist is None and self.allowlist:
-                header += "  (no allowlist recorded, scored with the current one)"
             self._status_label.setText(
                 f"WS {_fmt_bytes(state.wset_bytes)}  |  {state.thread_count} threads"
             )
@@ -321,6 +315,15 @@ class MainWindow(QMainWindow):
                                                thread_starts, unpacked,
                                                self.playback.target_name,
                                                self.playback.allowlist)
+        # Only after the rows are scored, because the question is not whether
+        # this machine has an allowlist but whether it excused something here.
+        # An entry for another process, or one for a rule that did not fire in
+        # this sample, changes no band, and a notice about it would send an
+        # analyst looking for an influence that is not there.
+        if (self.playback.allowlist is None
+                and self.region_view.model.excused_anything):
+            self.region_view.header.setText(
+                header + "  (no allowlist recorded, scored with the current one)")
 
     # --- shutdown ---------------------------------------------------------
     def closeEvent(self, event) -> None:
