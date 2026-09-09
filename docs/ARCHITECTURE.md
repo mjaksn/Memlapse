@@ -537,9 +537,12 @@ Two consequences worth stating plainly, because both are easy to get backwards:
 Where the model is not yet honoured: the live view carries a rewrite flag
 forward across refreshes (see [the content-change
 detector](#shipped-content-change-detector)), so its band can say more than
-the moment supports. That is a deliberate stand-in for having no timeline, and
-the way out is to give playback the history display live cannot have, not to
-make playback forget less carefully.
+the moment supports. That is a deliberate stand-in for having no timeline. The
+way out was to give playback the history display live cannot have rather than
+to make playback forget less carefully, and that is what ["Shipped: rewrite
+history"](#shipped-rewrite-history) is: playback keeps the flag on the sample
+it happened and says beside it what the whole run holds, so it says more than
+the live view without any sample of it claiming more than it saw.
 
 ### End-to-end data flow
 
@@ -617,12 +620,16 @@ way through cannot truncate a file that was already there.
 
 **Surface**, `ui/region_view.py`. `RegionTableModel` gained a **Score**
 column. On `set_regions(rows, heads, rewritten, thread_starts, unpacked,
-allowed)` it computes a `RegionVerdict` per row and:
+allowed, rewrites, origin_us)` it computes a `RegionVerdict` per row and:
 
 - shows the numeric score (blank for benign rows),
 - tints suspicious rows via `theme.heat_color(score/100)` (green→amber→red,
   translucent so text stays legible on the dark theme), and
-- exposes the human-readable `reasons` as the row tooltip.
+- exposes the human-readable `reasons` as the row tooltip, followed by what
+  the open recording knows about that region over the whole run (["Shipped:
+  rewrite history"](#shipped-rewrite-history)). The last two arguments carry
+  that history and are playback's alone to pass; a row with no verdict and a
+  history still gets a tooltip, and a row with neither gets none.
 
 Both modes score with the full content signals: live mode reads the head of
 each executable region on the pool thread alongside the map, playback reads
@@ -648,6 +655,10 @@ the largest process measured on this machine.
 - Each seek in playback now reads the previous sample's region list and head
   hashes as well as the anchored sample's, so a scrub costs about three region
   reads per step instead of one. The hashes query touches no blob content.
+- Opening a recording walks it once for the rewrite history, on the GUI
+  thread, which is 58 ms for a two minute recording and 573 ms for a ten
+  minute one (measured above). A seek costs nothing more afterwards: the
+  tooltip and the timeline marks both read the dictionary that pass built.
 - Scoring is O(head length) per region and runs on the GUI thread only at
   `set_regions` time (per seek or per live refresh), which is negligible. The
   live change detector compares head bytes directly rather than hashing them,
@@ -749,14 +760,14 @@ than inside it. Live's stickiness is the one thing that currently breaks that
 rule, and it breaks it in the direction of saying more than the moment
 supports.
 
-What follows is a real limitation and it is not fixed yet: **a one-shot
-rewrite is band-visible in a replay only at the sample it landed on**, and
-nothing on the timeline marks which sample that is. The answer is not to make
-playback sticky, which would cost the scrub-back that makes playback worth
-having. It is to show the history alongside the band, which only a recording
-can do at all. See ["Planned: rewrite history"](#planned-rewrite-history).
+That left a real limitation: **a one-shot rewrite is band-visible in a replay
+only at the sample it landed on**, and nothing on the timeline marked which
+sample that was. The answer was never to make playback sticky, which would
+cost the scrub-back that makes playback worth having. It was to show the
+history alongside the band, which only a recording can do at all. See
+["Shipped: rewrite history"](#shipped-rewrite-history).
 
-### Planned: rewrite history
+### Shipped: rewrite history
 
 The history a recording holds and a live view cannot: how many times each
 region was rewritten across the whole recording, and at which samples. It is
@@ -766,43 +777,71 @@ itself must not absorb, and it closes the gap the content-change detector
 leaves, where a one-shot rewrite is band-visible only at the sample it landed
 on.
 
-Nothing new has to be captured. `region_snapshot` already holds
+Nothing new is captured. `region_snapshot` already holds
 `ts_us, base_addr, size, protect, state, head_hash` for every region of every
-sample, so one query answers the whole recording: a `LAG` window partitioned
-by `base_addr` compares each region against its own previous appearance.
+sample, so the whole recording was already there to be read.
 
-The one subtlety is that a window function will happily compare across a gap.
-A region absent for a sample and back with different bytes is **not** a
-rewrite by the definition in `rewritten_regions`, which needs two consecutive
-samples, so the query has to rank samples and require the previous row to be
-`n - 1`. Prototyped and cross-checked against `rewritten_regions` applied
-pairwise, including that case: same answers.
+`Dao.region_samples` walks it once, yielding one `(ts_us, regions, digests)`
+per sample, and `PlaybackEngine.rewrite_history` hands each consecutive pair
+to `rewritten_regions`, the same function one seek uses, filing each change
+under the later of the two samples. `open()` runs it once and keeps the
+result on `PlaybackEngine.rewrites`.
 
-Cost, measured on this machine on 2026-09-09, best of three:
+**Why the pass is in Python rather than a `LAG` window.** The SQL was
+prototyped first and its cost measured, and the numbers were fine. What
+decided it was that the window function has to restate what a rewrite *is*,
+in SQL: same base, size, protection and state, committed and executable on
+both sides, a head on both sides, and the two heads different. That is a
+second copy of `rewritten_regions` in another language, and the copy that
+drifts is the one no test runs. Feeding pairs to the original costs one pass
+and keeps one definition.
 
-| Recording | Rows | Whole table | Filter pushed below the window |
+The subtlety the SQL prototype handled by ranking samples and requiring the
+previous row to be `n - 1` is the same either way, and it is worth stating
+plainly because it is easy to lose: **a region absent for a sample and back
+with different bytes is not a rewrite.** It is an allocation carrying whatever
+it carries. So `region_samples` yields every sample the recording has, empty
+when nothing in it survived the filter, and a pass that skipped the empty ones
+would join their neighbours into a pair they are not. `test_playback.py`
+builds that shape and asserts the pass and a single-seek `rewritten()` agree
+that nothing was rewritten.
+
+Cost, measured on this machine on 2026-09-09, best of three, over synthetic
+recordings of the two shapes below:
+
+| Recording | Rows | Every row read | Filter pushed into the query |
 | --- | ---: | ---: | ---: |
-| 2 min, 800 regions | 96,000 | 216 ms | **37 ms** |
-| 10 min, 1,500 regions | 900,000 | 2,397 ms | **444 ms** |
+| 2 min, 800 regions | 96,000 | 255 ms | **58 ms** |
+| 10 min, 1,500 regions | 900,000 | 2,668 ms | **573 ms** |
 
-The push-down is what makes it affordable: only committed, executable,
-non-guard rows carrying a head enter the window, about 14 percent of the
-table. An index on `(recording_id, base_addr, ts_us)` does **not** help,
-because the window sorts everything regardless; that was measured too, so it
-does not need re-deriving. Once per recording on open, off the GUI thread, is
-the intended shape.
+The push-down is what makes it affordable, and the difference is a stall on
+open rather than a micro-optimisation. Only committed, executable, non-guard
+rows carrying a head are fetched, about a seventh of the table. Narrowing the
+read cannot change the answer: every row it leaves behind is one
+`rewritten_regions` would have refused on both sides of the comparison. The
+query is told which rows those are rather than knowing itself, and what it is
+handed is `analytics.EXEC_MASK`, so "executable" has one spelling rather than
+one per language. An index on `(recording_id, base_addr, ts_us)` does not
+help; that was measured for the SQL version and does not need re-deriving.
 
-Three pieces, in the order they are worth building:
+What the analyst sees, in the two places a recording can speak:
 
-1. `PlaybackEngine.rewrite_history()` returning `{base_addr: [ts, ...]}`. Pure
-   storage and services, testable without Qt.
-2. The Score column tooltip names the count and the most recent time, so a
-   held-back row can no longer imply calm about a region the recording knows
-   was rewritten. This alone removes the misleading part.
-3. `TimelineWidget.set_marks()` and tick painting on the scrubber, so an
-   analyst can see which samples to seek to rather than only be told they
-   exist. The widget has no custom painting today, so this is the only
-   genuinely new UI work.
+1. **The Score column tooltip** names the count and the most recent time, as
+   "rewritten 3 times in this recording, most recently at 00:04:11", read
+   against the recording's own first sample so the clock matches the timeline
+   that scrubs to it. It appears on a row that scores nothing as readily as on
+   one that scores well, which is the point of it: the region rewritten four
+   minutes ago is quiet now, and an empty Score cell beside it reads as a
+   region with nothing to say. `describe_rewrites` in `services/playback.py`
+   is the wording, kept out of the widget so it can be tested without Qt.
+2. **Ticks on the scrubber**, `TimelineWidget.set_marks()` and
+   `MarkedSlider.paintEvent`, so the samples worth seeking to can be seen
+   rather than only read about. A mark is a sample index, and the tick is
+   painted where the style itself puts the handle for that value, because a
+   tick a few pixels off is worse than no tick: it gets followed, it lands on
+   the neighbouring sample, and the region looks quiet after all.
+
+Neither touches a score. The band still answers for one sample.
 
 ### Planned: temporal RW→RX transition detector
 

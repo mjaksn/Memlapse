@@ -36,7 +36,12 @@ analyst scrub back to the moment the memory changed.
   code-like, the traces an injector leaves when it overwrites executable
   memory that already exists and when a payload decrypts itself there. Both
   work in playback, between consecutive samples, and in live mode, between
-  one refresh and the next.
+  one refresh and the next. A replay then says more than a live watch can:
+  every score is still the answer for the sample being shown, but a region's
+  tooltip also says how many times the whole recording saw it rewritten and
+  when that last happened, and the timeline carries a tick at each of those
+  samples to scrub to. A region rewritten once, minutes ago, scores nothing
+  now and would otherwise pass for quiet.
 
 - **Dashboard**, a vivid, near-live overview tab: system RAM/swap gauges, a
   scrolling usage timeline, a heat-ranked top-process list (click to drill into
@@ -52,7 +57,9 @@ Next: per-thread memory activity via ETW (Phase 5).
 2. Click **● Record** to sample it over time; **■ Stop** when done. Right-click
    a region to save its bytes for a disassembler or a YARA rule.
 3. **Open Recording ▾** → pick a recording to enter playback, then drag the
-   timeline (or press ▶) to replay it. **Live** returns to real-time mode.
+   timeline (or press ▶) to replay it. A tick on the timeline is a sample
+   where a region's executable bytes changed, which is where to scrub.
+   **Live** returns to real-time mode.
 
 ## Run
 

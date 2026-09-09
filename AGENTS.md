@@ -61,7 +61,7 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 385 passed with 100 percent line and branch
+(2026-09-06); the test run is 410 passed with 100 percent line and branch
 coverage (2026-09-09).
 
 ## Conventions
@@ -147,6 +147,12 @@ coverage (2026-09-09).
   sticky rewrite flag, is a stand-in for having no timeline to scrub. Read
   `docs/ARCHITECTURE.md`, "A band is about a moment", before changing anything
   that makes the two modes score differently.
+- Beside the band is where `PlaybackEngine.rewrites` goes: the whole
+  recording's rewrites per region, walked once on `open()`, shown as a line
+  in the row's tooltip and as ticks on the timeline. It reaches no score, and
+  a row that scores nothing still shows it, which is the case the feature
+  exists for. Anything else a recording alone can answer belongs in the same
+  place and not in `score_region`.
 - Some facts have to be recorded because no later pass can recover them:
   `process_snapshot.can_read` and `.created_ft` are properties of the sample,
   not of the process. Both are nullable and NULL means "not recorded", which
