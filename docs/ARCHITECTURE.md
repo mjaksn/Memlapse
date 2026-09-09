@@ -808,13 +808,20 @@ Nothing new is captured. `region_snapshot` already holds
 `ts_us, base_addr, size, protect, state, head_hash` for every region of every
 sample, so the whole recording was already there to be read.
 
-`Dao.region_samples` walks it once, yielding one `(ts_us, regions, digests)`
-per sample, and `PlaybackEngine.rewrite_history` hands each consecutive pair
-to `rewritten_regions`, the same function one seek uses, filing each change
-under the later of the two samples. `open()` runs it once and keeps the
-result on `PlaybackEngine.rewrites`.
+`Dao.region_samples` walks it once, yielding one
+`(ts_us, regions, digests, observed)` per sample. The last of those says
+whether the sample held a map at all, which is not the same question as
+whether anything in it was comparable, and the difference decides whether a
+region's absence ends its spell or means nothing was seen that tick.
 
-**Two things the whole-run view has to be careful about that one seek does
+`services.playback.walk_spells` hands each consecutive pair to
+`rewritten_regions`, the same function one seek uses, filing each change
+under the later of the two samples. `open()` starts that walk on a pool
+thread with a connection of its own; it arrives on
+`PlaybackEngine.rewrites_ready` and is kept on `PlaybackEngine.rewrites`,
+with the per-allocation form behind `rewrites_at`.
+
+**Three things the whole-run view has to be careful about that one seek does
 not.** A count and a tick are shown at every sample of the recording, so a
 wrong one is on screen the entire time and at samples where the header's
 warnings have nothing to say yet.
