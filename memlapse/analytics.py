@@ -205,6 +205,13 @@ RULE_UNPACKED = "unpacked"
 RULE_REWRITTEN = "rewritten"
 RULE_IMAGE_REWRITTEN = "image-rewritten"
 
+#: The rules a single VirtualQueryEx answers on its own, with no read, no
+#: thread query and no second look in time. They describe the shape of the
+#: map and nothing about what is in the memory or what it did, which is why
+#: they cannot carry a region into the top band by themselves: see
+#: :attr:`RegionVerdict.band`.
+MAP_SHAPE_RULES = frozenset({RULE_PRIVATE_EXEC, RULE_MAPPED_EXEC, RULE_RWX})
+
 #: Band for a region that scored only on rules an allowlist entry excused.
 #: Named rather than spelled out at each use, since the UI switches on it.
 ALLOWLISTED = "allowlisted"
@@ -339,6 +346,17 @@ class RegionVerdict:
         return min(sum(r.points for r in self.reasons if not r.allowed), 100)
 
     @property
+    def map_shape_only(self) -> bool:
+        """Every rule still counting came from the memory map alone.
+
+        True for a region whose whole case is its type and its protection:
+        nothing was read from it, no thread was found starting in it, and it
+        did not change between two looks. See :data:`MAP_SHAPE_RULES`.
+        """
+        counting = {r.rule for r in self.reasons if not r.allowed}
+        return bool(counting) and counting <= MAP_SHAPE_RULES
+
+    @property
     def band(self) -> str:
         """Triage band: "", "low", "review", "likely injection", "allowlisted".
 
@@ -349,13 +367,24 @@ class RegionVerdict:
         points left once the excused rules are subtracted: the row and the
         number stay, the verdict does not. Since every rule scores something,
         that is the same as every rule that fired having been excused.
+
+        The top band asks for one thing more than the points. A region whose
+        whole case is :data:`MAP_SHAPE_RULES` stops at "review" however far
+        it clears :data:`LIKELY_SCORE`, because the map alone cannot tell a
+        JIT arena from a payload: both are private, both are executable, and
+        a great many of the first exist on an ordinary machine. Reaching
+        "likely injection" takes a signal from somewhere else, which means
+        bytes that were read, a thread found starting in the region, or a
+        change between two looks at it. Measured on this machine on
+        2026-09-08, that is the whole of the difference: every region in the
+        top band scored on nothing but private plus RWX.
         """
         if self.score <= 0:
             return ""
         effective = self.effective_score
         if effective == 0:
             return ALLOWLISTED
-        if effective >= LIKELY_SCORE:
+        if effective >= LIKELY_SCORE and not self.map_shape_only:
             return "likely injection"
         if effective >= REVIEW_SCORE:
             return "review"

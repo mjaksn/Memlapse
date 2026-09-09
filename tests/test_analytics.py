@@ -3,7 +3,8 @@
 import pytest
 
 from memlapse.analytics import (
-    ENTROPY_PACKED, Allowlist, AllowlistEntry, Mover, RULE_HIGH_ENTROPY,
+    ENTROPY_PACKED, Allowlist, AllowlistEntry, LIKELY_SCORE, MAP_SHAPE_RULES,
+    Mover, RULE_HIGH_ENTROPY,
     RULE_IMAGE_REWRITTEN,
     RULE_MAPPED_EXEC, RULE_NOP_SLED, RULE_PE_HEADER, RULE_PRIVATE_EXEC,
     RULE_REWRITTEN, RULE_RWX, RULE_THREAD_START, RULE_UNPACKED,
@@ -492,7 +493,10 @@ def test_an_unallowlisted_region_scores_exactly_as_before():
     region = _region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
     v = score_region(region)
     assert v.score == 75 and v.effective_score == 75
-    assert v.band == "likely injection"
+    # Both numbers are untouched with no entry against the process. The band
+    # is review rather than the top one because private plus RWX is the whole
+    # case, which the map alone cannot separate from a JIT arena.
+    assert v.band == "review"
     assert not any(r.allowed for r in v.reasons)
 
 
@@ -535,9 +539,71 @@ def test_removing_an_entry_restores_the_verdict():
                       AllowlistEntry("jit.exe", RULE_RWX)])
     muted = score_region(region, allowed=book.rules_for("jit.exe"))
     restored = score_region(region, allowed=Allowlist().rules_for("jit.exe"))
-    assert muted.band == "allowlisted" and restored.band == "likely injection"
+    assert muted.band == "allowlisted" and restored.band == "review"
     assert muted.score == restored.score
     assert [r.text for r in muted.reasons] == [r.text for r in restored.reasons]
+
+
+# --- the top band asks for more than the shape of the map -------------------
+def test_map_shape_alone_stops_at_review():
+    """Private plus RWX is 75 on the nose, and it is still not a finding.
+
+    Every region this machine put in the top band on 2026-09-08 scored on
+    exactly these two rules and nothing else, which is what a JIT arena looks
+    like. The map cannot tell one from a payload, so it does not get to try.
+    """
+    v = score_region(_region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE))
+    assert _rules(v) == {RULE_PRIVATE_EXEC, RULE_RWX}
+    assert v.effective_score == LIKELY_SCORE   # clears the threshold
+    assert v.map_shape_only
+    assert v.band == "review"                  # and is held back anyway
+
+
+def test_one_signal_beyond_the_map_is_enough():
+    """Any of the three kinds lifts the same region into the top band."""
+    region = _region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
+    read = score_region(region, head=b"MZ")                  # bytes read
+    seen = score_region(region, thread_start=True)            # a thread there
+    changed = score_region(region, rewritten=True)            # changed in time
+    for v in (read, seen, changed):
+        assert not v.map_shape_only
+        assert v.band == "likely injection"
+
+
+def test_a_thread_in_unbacked_memory_still_lands_without_rwx():
+    """The remote-thread tell survives, which rules out raising the threshold.
+
+    A loader that allocates private RW, writes, flips to RX and starts a
+    thread never holds RWX at all. It scores 50 + 25 exactly, so lifting
+    LIKELY_SCORE to 80 would have lost it. Holding the threshold and asking
+    for a non-map signal instead keeps it.
+    """
+    v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE), thread_start=True)
+    assert _rules(v) == {RULE_PRIVATE_EXEC, RULE_THREAD_START}
+    assert v.effective_score == 75
+    assert v.band == "likely injection"
+
+
+def test_excusing_the_only_real_signal_drops_the_region_back():
+    """What is left after an entry is what bands the region, shape included."""
+    region = _region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
+    v = score_region(region, head=b"MZ", allowed={RULE_PE_HEADER})
+    assert v.score == 95 and v.effective_score == 75
+    assert v.map_shape_only                    # only private and RWX still count
+    assert v.band == "review"
+
+
+def test_map_shape_rules_are_exactly_the_three_the_map_answers():
+    """Schema: this set decides a band, so a change to it is a change to that."""
+    assert MAP_SHAPE_RULES == {RULE_PRIVATE_EXEC, RULE_MAPPED_EXEC, RULE_RWX}
+
+
+def test_a_fully_excused_region_is_not_map_shape_only():
+    """Nothing counts, so there is no shape-only case to make."""
+    v = score_region(_region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE),
+                     allowed={RULE_PRIVATE_EXEC, RULE_RWX})
+    assert not v.map_shape_only
+    assert v.band == "allowlisted"
 
 
 def test_a_benign_region_is_not_called_allowlisted():
