@@ -141,6 +141,19 @@ coverage (2026-09-09).
   made under the old name live in a `MemDo` folder beside it and are not picked up.
 - `git grep -P` handles Unicode escapes; plain `grep -P` on this machine does not, and
   fails silently inside a pipeline.
+- The elevated editor launcher ends its own session in about a second once
+  UAC is accepted, and that is correct. `--elevate` asks Windows for a new
+  elevated process and the current one returns 0, so a debugger is left with
+  nothing attached and the run reads as a crash. Decline the UAC prompt and
+  `relaunch_as_admin` returns False instead, whereupon `main` falls through
+  and the same process runs unelevated with the debugger still on it, so a run
+  that does not end is not a fault either. Debugging with privileges means
+  starting the editor elevated and using the plain launcher. Of the editor
+  directories only `.idea/runConfigurations/` and `.vscode/launch.json` are
+  tracked; the rest of both is per-user and ignored.
+- A PyCharm run configuration is XML, so its comments cannot contain two
+  hyphens in a row. Writing `--elevate` in one leaves a file no XML parser
+  will accept; what PyCharm itself then shows has not been checked here.
 
 ## Out of bounds
 
