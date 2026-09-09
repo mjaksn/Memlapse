@@ -283,7 +283,8 @@ class MainWindow(QMainWindow):
         else:
             header = f"Recording #{self.playback.recording_id}, no data at this time"
         self.region_view.show_recorded_regions(regions, header, heads, rewritten,
-                                               thread_starts, unpacked)
+                                               thread_starts, unpacked,
+                                               self.playback.target_name)
 
     # --- shutdown ---------------------------------------------------------
     def closeEvent(self, event) -> None:

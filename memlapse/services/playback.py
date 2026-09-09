@@ -22,6 +22,10 @@ class PlaybackEngine:
         self._dao = Dao(self._conn)
         self.recording_id: int | None = None
         self.sample_times: list[int] = []
+        #: Image name of the recorded process, which is what an allowlist
+        #: entry is keyed on. Playback has to score against the same entries
+        #: as live mode or the two disagree about the same process.
+        self.target_name: str = ""
 
     def list_recordings(self) -> list[RecordingRow]:
         return self._dao.list_recordings()
@@ -30,6 +34,9 @@ class PlaybackEngine:
         """Load a recording; returns its sample timestamps (may be empty)."""
         self.recording_id = recording_id
         self.sample_times = self._dao.sample_times(recording_id)
+        self.target_name = next(
+            (r.target_name for r in self._dao.list_recordings()
+             if r.id == recording_id), "")
         return self.sample_times
 
     def seek(self, ts_us: int) -> tuple[ProcState | None, list[Region]]:
