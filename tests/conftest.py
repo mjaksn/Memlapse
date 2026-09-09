@@ -127,6 +127,10 @@ class InlinePool:
     def start(self, runnable) -> None:
         runnable.run()
 
+    def tryTake(self, runnable) -> bool:
+        """Never: by the time start() returned the walk was already done."""
+        return False
+
 
 @pytest.fixture(autouse=True)
 def inline_history_pool(monkeypatch):

@@ -843,3 +843,76 @@ def test_a_failure_from_a_walk_nobody_is_waiting_for_is_dropped(tmp_db):
         assert failures == []
     finally:
         engine.close()
+
+
+class _RecordingPool:
+    """A pool that queues rather than runs, so retirement can be observed."""
+
+    def __init__(self, takeable=True):
+        self.started, self.taken, self._takeable = [], [], takeable
+
+    def start(self, runnable):
+        self.started.append(runnable)
+
+    def tryTake(self, runnable):
+        if not self._takeable:
+            return False
+        self.taken.append(runnable)
+        return True
+
+
+def test_opening_another_recording_takes_the_first_walk_off_the_pool(tmp_db,
+                                                                    monkeypatch):
+    """Dropping the answer is not the same as not doing the work.
+
+    Switching recordings would otherwise queue a full scan of each one, and
+    the recording the analyst is waiting for would sit behind scans nobody
+    wants any more.
+    """
+    pool = _RecordingPool()
+    monkeypatch.setattr(playback_mod.PlaybackEngine, "pool_factory",
+                        staticmethod(lambda: pool))
+    first = _rewrite_db(tmp_db, [(1_000, b"aaa"), (2_000, b"bbb")])
+    second = _rewrite_db(tmp_db, [(3_000, b"ccc")])
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(first)
+        engine.open(second)
+        assert len(pool.started) == 2
+        assert pool.taken == [pool.started[0]]      # the first, never run
+    finally:
+        engine.close()
+
+
+def test_a_walk_already_running_is_asked_to_stop(tmp_db, monkeypatch):
+    """It cannot be taken back, so it is told to give up at the next sample."""
+    pool = _RecordingPool(takeable=False)
+    monkeypatch.setattr(playback_mod.PlaybackEngine, "pool_factory",
+                        staticmethod(lambda: pool))
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(_rewrite_db(tmp_db, [(1_000, b"aaa"), (2_000, b"bbb")]))
+        running = pool.started[0]
+        engine.close()
+        assert running._stopped is True
+    finally:
+        pass
+
+
+def test_a_stopped_walk_reads_no_further(tmp_db, monkeypatch):
+    """And brings nothing back, since nobody is waiting for a half answer."""
+    pool = _RecordingPool(takeable=False)
+    monkeypatch.setattr(playback_mod.PlaybackEngine, "pool_factory",
+                        staticmethod(lambda: pool))
+    engine = PlaybackEngine(db_path=tmp_db)
+    rid = _rewrite_db(tmp_db, [(1_000, b"aaa"), (2_000, b"bbb")])
+    try:
+        engine.open(rid)
+        worker = pool.started[0]
+        worker.stop()
+        got = []
+        worker.signals.done.connect(lambda seq, spells: got.append(spells))
+        worker.run()
+        assert got == [{}]      # abandoned, not a walk that found nothing
+    finally:
+        engine.close()

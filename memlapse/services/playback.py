@@ -55,7 +55,7 @@ def describe_rewrites(times: Sequence[int], origin_us: int) -> str:
 
 
 def walk_spells(
-    dao: Dao, recording_id: int
+    dao: Dao, recording_id: int, should_stop=None
 ) -> dict[tuple[int, int, int, int], list[tuple[int, int, list[int]]]]:
     """The whole-run walk, keeping each identity's occurrences apart.
 
@@ -77,6 +77,9 @@ def walk_spells(
     readable region under this identity has said the region is not there in
     the form the history is about, and the spell ends.
 
+    ``should_stop`` is consulted once per sample, so a walk nobody is waiting
+    for stops at the next one rather than reading the rest of the recording.
+
     That leaves one imprecision, deliberately. A region present in the map but
     with no head captured this tick is not comparable, so its spell ends and a
     new one begins when the bytes come back. That splits a history rather than
@@ -93,6 +96,11 @@ def walk_spells(
         recording_id, state=MEM_COMMIT, protect_any=EXEC_MASK,
         protect_none=PAGE_GUARD)
     for ts_us, regions, digests, observed in walk:
+        if should_stop is not None and should_stop():
+            # Asked between samples, which is where the walk is cheap to
+            # abandon. What is half built is thrown away rather than
+            # returned: whoever asked for it has stopped waiting.
+            return {}
         if ts_us in restarts:
             # A different process holds the pid now, so nothing that was
             # open belongs to what is about to appear.
@@ -146,12 +154,18 @@ class _HistoryWorker(QRunnable):
         self._db_path = db_path
         self._recording_id = recording_id
         self._sequence = sequence
+        self._stopped = False
+
+    def stop(self) -> None:
+        """Ask a walk already running to give up at the next sample."""
+        self._stopped = True
 
     def run(self) -> None:
         try:
             conn = connect(self._db_path)
             try:
-                spells = walk_spells(Dao(conn), self._recording_id)
+                spells = walk_spells(Dao(conn), self._recording_id,
+                                     lambda: self._stopped)
             finally:
                 conn.close()
         except Exception as exc:    # never let a pool thread die silently
@@ -184,6 +198,9 @@ class PlaybackEngine(QObject):
         #: the analyst moved on is dropped instead of overwriting what is on
         #: screen with a previous recording's history.
         self._sequence = 0
+        #: The walk in flight, kept so the next open can take it back off the
+        #: pool if it has not started, and ask it to stop if it has.
+        self._worker: _HistoryWorker | None = None
         self._conn = connect(db_path)
         self._dao = Dao(self._conn)
         self.recording_id: int | None = None
@@ -231,9 +248,11 @@ class PlaybackEngine(QObject):
         # goes to a pool thread and the answer arrives on `rewrites_ready`.
         self._spells, self.rewrites = {}, {}
         self._sequence += 1
+        self._retire_walk()
         worker = _HistoryWorker(self._db_path, recording_id, self._sequence)
         worker.signals.done.connect(self._history_walked)
         worker.signals.failed.connect(self._history_gave_up)
+        self._worker = worker
         self._pool.start(worker)
         self.allowlist = self._dao.allowlist_for(recording_id)
         return self.sample_times
@@ -396,9 +415,25 @@ class PlaybackEngine(QObject):
             return
         self.history_failed.emit(message)
 
+    def _retire_walk(self) -> None:
+        """Stop paying for a walk whose answer is no longer wanted.
+
+        The sequence number already drops a stale result, but the work still
+        runs, and switching between recordings would otherwise queue a scan
+        of each behind the one the analyst is waiting for. Taken off the pool
+        if it has not started; asked to stop if it has. Best effort by
+        nature: a walk already inside its last sample finishes it.
+        """
+        worker, self._worker = self._worker, None
+        if worker is None:
+            return
+        if not self._pool.tryTake(worker):
+            worker.stop()
+
     def close(self) -> None:
         # Anything still walking is now answering for a closed connection.
         self._sequence += 1
+        self._retire_walk()
         self._conn.close()
 
     def thread_start_regions(self, ts_us: int) -> set[int]:
