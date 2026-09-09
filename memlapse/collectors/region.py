@@ -7,6 +7,10 @@ address of every thread it can query, and writes them as one sample to
 SQLite. This is the process-wide sampling that powers playback; per-thread
 attribution comes later via ETW.
 
+It also records two facts about the sample itself, because no later analysis
+can recover them: whether the handle could read memory, and which instance of
+the pid answered. See ARCHITECTURE.md, "A band is about a moment".
+
 The sampler owns its own DB connection (opened inside run(), on the sampler
 thread) because SQLite connections cannot cross threads.
 """
@@ -14,6 +18,7 @@ thread) because SQLite connections cannot cross threads.
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 
 import psutil
 from PySide6.QtCore import QThread, Signal
@@ -117,6 +122,19 @@ class RegionSampler(QThread):
             # and the thread walk and the two halves would describe different
             # processes. Off the GUI thread, like every other read here.
             thread_starts = start_addresses(self.pid)
+            # Recorded because a replay cannot work either out later. Without
+            # can_read, an empty head set is ambiguous between "reads were
+            # refused" and "nothing executable to read"; without the creation
+            # time, nothing downstream can tell that the pid was reused
+            # between two samples and the recording covers two processes.
+            try:
+                created = pm.creation_time()
+            except ProcessAccessError:
+                # A sample with no identity is still a sample. Losing the map
+                # over it would throw away the reading we came for, and this
+                # is the failure a target on its way out produces.
+                created = None
+            state = replace(state, can_read=pm.can_read, created_ft=created)
         dao.add_sample(rec_id, ts, state, regions, heads, thread_starts)
         self.sampled.emit(ts, len(regions))
 
