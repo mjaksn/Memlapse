@@ -812,6 +812,20 @@ warnings have nothing to say yet.
   rewrites on the second one's row. The price is that a region whose
   protection changes starts a fresh history, since it is a fresh identity;
   that is the safe direction, and a protection change is its own signal.
+- **An identity is not an allocation either, so the walk keeps spells.**
+  Windows can free a region and hand back one with the same base, size,
+  protection and state, and no structural key can separate those: only the
+  gap between them can, and only a pass that sees every sample has it. Each
+  unbroken run of samples an identity appears in is one spell, and
+  `PlaybackEngine.rewrites_at` gives a row the spell it is in rather than
+  everything its address has ever done, resolved against the anchored sample
+  so a seek between two samples reads the one it shows. The marks on the
+  scrubber come from `rewrites` instead, which keeps every spell, because a
+  row answers for the allocation on screen and the scrubber answers for the
+  run. A sample whose map came back empty ends no spell: nothing was seen
+  that tick, which is not the same as everything having been freed, and an
+  unelevated recording would otherwise have its history cut in two at every
+  sample.
 - **It restarts at a pid reuse.** `Dao.instance_changes` reports the samples
   where `created_ft` changed, and the walk drops what it was holding at each
   of them, because the sample before belongs to a different process that

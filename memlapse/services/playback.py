@@ -72,6 +72,12 @@ class PlaybackEngine:
         #: rather than folded into one, since a band answers for the sample
         #: the analyst is standing on and this answers for the whole run.
         self.rewrites: dict[tuple[int, int, int, int], list[int]] = {}
+        #: The same walk with each identity's occurrences kept apart, which
+        #: is what :meth:`rewrites_at` reads. ``rewrites`` above is the whole
+        #: recording and drives the marks on the scrubber; a row's tooltip
+        #: asks for the spell it is in.
+        self._spells: dict[tuple[int, int, int, int],
+                           list[tuple[int, int, list[int]]]] = {}
         #: The allowlist the recording was made under, or None when the
         #: recording never wrote one down. None is not an empty allowlist:
         #: it sends the caller back to whatever is in force now, which is how
@@ -91,7 +97,11 @@ class PlaybackEngine:
             (r.target_name for r in self._dao.list_recordings()
              if r.id == recording_id), "")
         self.instance_changes = self._dao.instance_changes(recording_id)
-        self.rewrites = self.rewrite_history(recording_id)
+        self._spells = self.rewrite_spells(recording_id)
+        self.rewrites = {
+            identity: [t for _, _, times in runs for t in times]
+            for identity, runs in self._spells.items()
+            if any(times for _, _, times in runs)}
         self.allowlist = self._dao.allowlist_for(recording_id)
         return self.sample_times
 
@@ -202,7 +212,33 @@ class PlaybackEngine:
         :func:`rewritten_regions` would have refused on both sides of the
         comparison.
         """
-        history: dict[tuple[int, int, int, int], list[int]] = {}
+        return {identity: [t for _, _, times in spells for t in times]
+                for identity, spells in self.rewrite_spells(recording_id).items()
+                if any(times for _, _, times in spells)}
+
+    def rewrite_spells(
+        self, recording_id: int
+    ) -> dict[tuple[int, int, int, int], list[tuple[int, int, list[int]]]]:
+        """The same walk, but keeping each identity's occurrences apart.
+
+        An identity is not quite an allocation either. Windows can free a
+        region and hand back one with the same base, size, protection and
+        state, and no structural key can tell those apart; only the gap
+        between them can, and only a walk that sees every sample has it. So
+        each unbroken run of samples an identity appears in is one spell,
+        recorded as ``(first_ts, last_ts, times)``, and a region that comes
+        back after being gone starts a new one. :meth:`rewrites_at` then hands
+        a row the spell it is actually in, rather than everything the address
+        has ever done.
+
+        A sample whose map came back empty closes nothing. Nothing was seen
+        that tick, which is not the same as everything having been freed, and
+        treating it as a free would cut every spell in the recording in two
+        every time a sample could not be read.
+        """
+        spells: dict[tuple[int, int, int, int],
+                     list[list]] = {}
+        live: dict[tuple[int, int, int, int], list] = {}
         before: list[Region] = []
         before_digests: dict[int, bytes] = {}
         restarts = set(self._dao.instance_changes(recording_id))
@@ -211,12 +247,52 @@ class PlaybackEngine:
             protect_none=PAGE_GUARD)
         for ts_us, regions, digests in walk:
             if ts_us in restarts:
-                before, before_digests = [], {}
+                # A different process holds the pid now, so nothing that was
+                # open belongs to what is about to appear.
+                before, before_digests, live = [], {}, {}
             shown = {r.base_addr: r for r in regions}
+            if regions:
+                present = {region_identity(r) for r in regions}
+                for identity in list(live):
+                    if identity not in present:
+                        del live[identity]
+                for identity in present:
+                    spell = live.get(identity)
+                    if spell is None:
+                        spell = [ts_us, ts_us, []]
+                        spells.setdefault(identity, []).append(spell)
+                        live[identity] = spell
+                    else:
+                        spell[1] = ts_us
             for base in rewritten_regions(before, before_digests, regions, digests):
-                history.setdefault(region_identity(shown[base]), []).append(ts_us)
+                live[region_identity(shown[base])][2].append(ts_us)
             before, before_digests = regions, digests
-        return history
+        return {identity: [(a, b, times) for a, b, times in runs]
+                for identity, runs in spells.items()}
+
+    def rewrites_at(self, ts_us: int) -> dict[
+            tuple[int, int, int, int], list[int]]:
+        """What each region on screen has done during the spell it is in now.
+
+        Keyed the same way the row is scored, so the view looks up what it is
+        already holding. A region freed and re-allocated at the same base with
+        the same shape gets the rewrites of the allocation live at this
+        sample, not the ones its predecessor made. Resolved against the
+        anchored sample rather than the raw time, because a seek between two
+        samples shows the earlier one.
+        """
+        if self.recording_id is None:
+            return {}
+        anchor = self._dao.sample_at(self.recording_id, ts_us)
+        if anchor is None:
+            return {}
+        found: dict[tuple[int, int, int, int], list[int]] = {}
+        for identity, runs in self._spells.items():
+            for first, last, times in runs:
+                if first <= anchor <= last and times:
+                    found[identity] = list(times)
+                    break
+        return found
 
     def close(self) -> None:
         self._conn.close()

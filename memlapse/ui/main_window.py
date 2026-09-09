@@ -322,7 +322,8 @@ class MainWindow(QMainWindow):
                                                thread_starts, unpacked,
                                                self.playback.target_name,
                                                self.playback.allowlist,
-                                               self.playback.rewrites, origin)
+                                               self.playback.rewrites_at(ts_us),
+                                               origin)
         # Only after the rows are scored, because the question is not whether
         # this machine has an allowlist but whether it excused something here.
         # An entry for another process, or one for a rule that did not fire in

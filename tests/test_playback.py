@@ -546,3 +546,144 @@ def test_open_keeps_a_recorded_empty_allowlist(tmp_db):
         assert engine.allowlist is not None and not engine.allowlist
     finally:
         engine.close()
+
+
+# --- one identity, two allocations ------------------------------------------
+def _two_spell_db(tmp_db):
+    """The region goes away for a sample and comes back the same shape.
+
+    Base, size, protection and state all match, so the structural identity is
+    the same on both sides of the gap and nothing but the gap says these are
+    two allocations. Another region keeps the middle sample non-empty, since
+    a sample with no map at all is "nothing was seen", not "everything was
+    freed".
+    """
+    other = Region(0x90000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    for ts, region, head in ((1_000, EXEC_REGION, b"aaa"),
+                             (2_000, EXEC_REGION, b"bbb"),   # rewrite here
+                             (3_000, other, b"xxx"),         # ours is gone
+                             (4_000, EXEC_REGION, b"ccc"),   # a new one
+                             (5_000, EXEC_REGION, b"ddd")):  # rewrite here
+        dao.add_sample(rid, ts, ProcState(ts, 1000, 1, 1, 1), [region],
+                       {region.base_addr: head})
+    conn.close()
+    return rid
+
+
+def test_a_row_is_shown_its_own_allocations_rewrites(tmp_db):
+    """The second allocation does not inherit the first one's history.
+
+    Both spells share an identity, so a lookup that ignored the gap would
+    show a row at 2,000 a rewrite that had not happened yet and a row at
+    5,000 one made by an allocation that no longer exists.
+    """
+    rid = _two_spell_db(tmp_db)
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.rewrites_at(2_000) == {EXEC_IDENTITY: [2_000]}
+        assert engine.rewrites_at(5_000) == {EXEC_IDENTITY: [5_000]}
+    finally:
+        engine.close()
+
+
+def test_the_scrubber_still_marks_every_rewrite_in_the_recording(tmp_db):
+    """The marks answer for the run, so they keep both spells.
+
+    The two surfaces want different things from one walk: a row wants the
+    allocation it is looking at, the scrubber wants every moment worth
+    scrubbing to.
+    """
+    rid = _two_spell_db(tmp_db)
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.rewrites == {EXEC_IDENTITY: [2_000, 5_000]}
+    finally:
+        engine.close()
+
+
+def test_a_seek_between_samples_reads_the_sample_it_shows(tmp_db):
+    """Resolved against the anchor, not the raw time.
+
+    A seek at 2,500 shows the sample at 2,000, so it has to answer with that
+    sample's spell. Resolving against the raw time would fall in the gap and
+    answer with nothing at all.
+    """
+    rid = _two_spell_db(tmp_db)
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.rewrites_at(2_500) == {EXEC_IDENTITY: [2_000]}
+    finally:
+        engine.close()
+
+
+def test_rewrites_at_is_empty_with_nothing_open(tmp_db):
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        assert engine.rewrites_at(1_000) == {}
+        engine.open(_two_spell_db(tmp_db))
+        assert engine.rewrites_at(0) == {}      # before the first sample
+    finally:
+        engine.close()
+
+
+def test_a_sample_that_saw_nothing_does_not_end_an_allocation(tmp_db):
+    """"Nothing was seen" is not "everything was freed".
+
+    A sample whose map came back empty is what an unelevated target produces,
+    and treating it as a free would cut the region's history in two at every
+    such sample and show the later half as a fresh allocation. The region
+    here is never observed to go away, so its rewrites stay one run.
+    """
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    for ts, regions, head in ((1_000, [EXEC_REGION], b"aaa"),
+                              (2_000, [EXEC_REGION], b"bbb"),  # rewrite here
+                              (3_000, [], None),               # saw nothing
+                              (4_000, [EXEC_REGION], b"bbb"),
+                              (5_000, [EXEC_REGION], b"ccc")):  # rewrite here
+        dao.add_sample(rid, ts, ProcState(ts, 1000, 1, 1, 1), regions,
+                       None if head is None else {EXEC_REGION.base_addr: head})
+    conn.close()
+
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.rewrites_at(5_000) == {EXEC_IDENTITY: [2_000, 5_000]}
+    finally:
+        engine.close()
+
+
+def test_a_new_process_does_not_continue_the_old_one_s_allocation(tmp_db):
+    """A pid reuse ends every spell, not just the one comparison.
+
+    Declining the comparison at the reuse keeps a stranger's bytes from being
+    called a rewrite. It does not, on its own, stop the spell that was open
+    before the reuse from running on into the new process, and a row in the
+    new process would then be shown the old one's rewrites at every sample.
+    """
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    for ts, created, head in ((1_000, 111, b"aaa"), (2_000, 111, b"bbb"),
+                              (3_000, 222, b"ccc"), (4_000, 222, b"ddd")):
+        dao.add_sample(rid, ts, ProcState(ts, 1000, 1, 1, 1, created_ft=created),
+                       [EXEC_REGION], {EXEC_REGION.base_addr: head})
+    conn.close()
+
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.instance_changes == [3_000]
+        # 2_000 belongs to the process that is gone, and 3_000 is the reuse,
+        # where the comparison is declined outright.
+        assert engine.rewrites_at(4_000) == {EXEC_IDENTITY: [4_000]}
+        assert engine.rewrites_at(2_000) == {EXEC_IDENTITY: [2_000]}
+    finally:
+        engine.close()
