@@ -633,7 +633,7 @@ def test_rewrites_at_is_empty_with_nothing_open(tmp_db):
 
 
 def test_a_sample_that_saw_nothing_does_not_end_an_allocation(tmp_db):
-    """"Nothing was seen" is not "everything was freed".
+    """Seeing nothing is not the same as everything having been freed.
 
     A sample whose map came back empty is what an unelevated target produces,
     and treating it as a free would cut the region's history in two at every
