@@ -661,9 +661,14 @@ the largest process measured on this machine.
 - Opening a recording walks it once for the rewrite history, on the GUI
   thread, which is 58 ms for a two minute recording and 573 ms for a ten
   minute one (measured in ["Shipped: rewrite
-  history"](#shipped-rewrite-history) below). A seek costs nothing more
-  afterwards: the tooltip and the timeline marks both read the dictionary
-  that pass built.
+  history"](#shipped-rewrite-history) below). The walk is linear in the
+  recording, so that is a stall that keeps growing: an hour of samples pays
+  about six times the ten minute figure. It is a one-shot cost on a
+  deliberate action rather than a repeated one, which is why it sits on the
+  GUI thread at all; a recording long enough for the wait to be intolerable
+  is the point at which it has to move to a worker with its own connection
+  and arrive by signal. A seek costs nothing more afterwards: the tooltip
+  and the timeline marks both read the dictionary that pass built.
 - Scoring is O(head length) per region and runs on the GUI thread only at
   `set_regions` time (per seek or per live refresh), which is negligible. The
   live change detector compares head bytes directly rather than hashing them,
