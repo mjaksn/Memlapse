@@ -348,9 +348,9 @@ in the header when the cap truncated the save. Playback refuses, because a
 recording holds the first 256 bytes of each executable region and a file made
 from that would look like a dump without being one, and so does a pid that has
 come to mean a different process since the map was read: bytes from whatever
-inherited the number would be evidence of nothing. The process minidump is not written: it needs
-`MiniDumpWriteDump` from dbghelp, which is a new dependency and a much
-larger artefact than anything the tool produces today.
+inherited the number would be evidence of nothing. The process minidump is
+not written: it needs `MiniDumpWriteDump` from dbghelp, which is a new
+dependency and a much larger artefact than anything the tool produces today.
 
 ### 4.2 Snapshot on alert. New
 

@@ -282,8 +282,9 @@ class RegionView(QWidget):
         # seen rewritten or unpacked stays flagged while it is still there,
         # since a change that showed for one tick and vanished would be a
         # detector nobody sees. Keeping the bytes rather than their hashes
-        # costs 256 bytes a region, under 200 KiB for the largest process on
-        # this machine, and is what lets the entropy rule run live at all.
+        # costs 256 bytes for each executable region, under 200 KiB for the
+        # largest process on this machine, and is what lets the entropy rule
+        # run live at all.
         self._refresh = QTimer(self)
         self._refresh.setInterval(LIVE_REFRESH_MS)
         self._refresh.timeout.connect(self._on_refresh_tick)
