@@ -192,34 +192,62 @@ class Dao:
         return changed
 
     def region_samples(
-        self, recording_id: int
+        self, recording_id: int, *, state: int, protect_any: int,
+        protect_none: int,
     ) -> Iterator[tuple[int, list[Region], dict[int, bytes]]]:
-        """Every region sample of a recording in order, with its head hashes.
+        """Every sample of a recording in order, carrying the comparable rows.
 
         Yields ``(ts_us, regions, digests)`` per sample, which is what a pass
         over a whole recording wants: the anchored reads below answer for one
-        moment each, so walking a recording through them costs two queries
-        and two MAX subqueries per sample, where this costs one query for the
-        lot. Rows with no hash are left out of ``digests`` exactly as
-        :meth:`head_hashes_at` leaves them out, so a row from before hashes
-        were stored reads as "cannot tell" rather than as a change.
+        moment each, so walking a recording through them costs two queries and
+        two MAX subqueries per sample, where this costs two queries for the
+        lot.
 
-        A generator on purpose: the caller holds two samples at a time
-        (see :meth:`PlaybackEngine.rewrite_history`), never the recording.
+        A row is only worth carrying if a content comparison could involve it,
+        and that is three conditions: it is in ``state``, its protection has
+        some bit of ``protect_any`` and no bit of ``protect_none``, and it
+        carries a head hash. All three are pushed into the query, because on a
+        ten minute recording they leave about a seventh of the table and the
+        difference is seconds rather than milliseconds. The caller passes the
+        values rather than storage knowing them: what makes a row comparable
+        is the detector's business (see
+        :meth:`PlaybackEngine.rewrite_history`), and storage is only being
+        asked to fetch less.
+
+        Every sample the recording has is yielded even so, empty when nothing
+        in it survived, and that is the part to be careful with. Skipping an
+        empty sample would leave the samples either side of it looking
+        consecutive, so a region that dropped out of the map for one tick and
+        came back holding different bytes would read as rewritten in place,
+        which is a different event with a different meaning.
+
+        A generator on purpose: the caller holds two samples at a time, never
+        the recording.
         """
-        rows = self.conn.execute(
-            "SELECT ts_us, base_addr, size, state, protect, type, head_hash "
-            "FROM region_snapshot WHERE recording_id=? ORDER BY ts_us, base_addr",
+        ticks = self.conn.execute(
+            "SELECT DISTINCT ts_us FROM region_snapshot WHERE recording_id=? "
+            "ORDER BY ts_us",
             (recording_id,),
         )
-        for ts_us, sample in groupby(rows, key=lambda row: row[0]):
+        rows = self.conn.execute(
+            "SELECT ts_us, base_addr, size, state, protect, type, head_hash "
+            "FROM region_snapshot WHERE recording_id=? AND state=? "
+            "AND (protect & ?) != 0 AND (protect & ?) = 0 "
+            "AND head_hash IS NOT NULL ORDER BY ts_us, base_addr",
+            (recording_id, state, protect_any, protect_none),
+        )
+        samples = groupby(rows, key=lambda row: row[0])
+        pending = next(samples, None)
+        for (ts_us,) in ticks:
             regions: list[Region] = []
             digests: dict[int, bytes] = {}
-            for _, base, size, state, protect, type_, digest in sample:
-                regions.append(Region(base_addr=base, size=size, state=state,
-                                      protect=protect, type=type_))
-                if digest is not None:
+            if pending is not None and pending[0] == ts_us:
+                for _, base, size, row_state, protect, type_, digest in pending[1]:
+                    regions.append(Region(base_addr=base, size=size,
+                                          state=row_state, protect=protect,
+                                          type=type_))
                     digests[base] = bytes(digest)
+                pending = next(samples, None)
             yield ts_us, regions, digests
 
     def sample_at(self, recording_id: int, ts_us: int) -> int | None:

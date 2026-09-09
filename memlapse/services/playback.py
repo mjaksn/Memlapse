@@ -15,11 +15,11 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from ..analytics import (
-    regions_with_thread_starts, rewritten_regions, unpacked_regions,
+    EXEC_MASK, regions_with_thread_starts, rewritten_regions, unpacked_regions,
 )
 from ..storage import connect
 from ..storage.dao import Dao, ProcState, RecordingRow
-from ..model.region import Region
+from ..model.region import MEM_COMMIT, PAGE_GUARD, Region
 
 
 def _elapsed(us: int) -> str:
@@ -147,11 +147,22 @@ class PlaybackEngine:
         empty map it is compared against yields no rewrites, which is the
         right answer rather than a coincidence: a region cannot be shown to
         have changed by a look that has nothing to compare with.
+
+        The read is told what a comparable row looks like, and the answer is
+        :func:`analytics.is_executable` split into the bits a query can ask
+        for: committed, some execute bit set, the guard bit clear. Fetching
+        the rest and discarding it costs seconds on a recording of any
+        length. Narrowing the read cannot change the answer, because every
+        row it leaves behind is one :func:`rewritten_regions` would have
+        refused on both sides of the comparison.
         """
         history: dict[int, list[int]] = {}
         before: list[Region] = []
         before_digests: dict[int, bytes] = {}
-        for ts_us, regions, digests in self._dao.region_samples(recording_id):
+        walk = self._dao.region_samples(
+            recording_id, state=MEM_COMMIT, protect_any=EXEC_MASK,
+            protect_none=PAGE_GUARD)
+        for ts_us, regions, digests in walk:
             for base in rewritten_regions(before, before_digests, regions, digests):
                 history.setdefault(base, []).append(ts_us)
             before, before_digests = regions, digests

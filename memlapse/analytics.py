@@ -150,7 +150,11 @@ def top_movers(
 # a Region plus optional bytes, so it runs against live samples *and* replayed
 # recordings, and unit-tests without Win32.
 
-_EXEC_MASK = (
+#: The protection bits that grant execute. Public because a query that
+#: pre-filters rows for the content detector asks the same question in SQL
+#: (see ``Dao.region_samples``), and two spellings of "executable" would
+#: drift the first time a constant was added to one of them.
+EXEC_MASK = (
     PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY
 )
 _WRITE_EXEC = PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY
@@ -290,7 +294,7 @@ class Allowlist:
 
 def is_executable(protect: int) -> bool:
     """True if ``protect`` grants execute and the page is not a guard page."""
-    return bool(protect & _EXEC_MASK) and not (protect & PAGE_GUARD)
+    return bool(protect & EXEC_MASK) and not (protect & PAGE_GUARD)
 
 
 def shannon_entropy(data: bytes) -> float:

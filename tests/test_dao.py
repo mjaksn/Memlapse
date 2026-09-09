@@ -269,34 +269,73 @@ def test_instance_changes_ignores_samples_with_no_identity(dao):
 
 
 # --- one pass over a whole recording ----------------------------------------
+def _walk(dao, rid):
+    """region_samples asked for what a content comparison can involve."""
+    from memlapse.analytics import EXEC_MASK
+    from memlapse.model.region import MEM_COMMIT, PAGE_GUARD
+    return list(dao.region_samples(rid, state=MEM_COMMIT,
+                                   protect_any=EXEC_MASK,
+                                   protect_none=PAGE_GUARD))
+
+
+def _exec_region(make_region, base):
+    from memlapse.model.region import MEM_COMMIT, PAGE_EXECUTE_READ
+    return make_region(base_addr=base, state=MEM_COMMIT,
+                       protect=PAGE_EXECUTE_READ)
+
+
 def test_region_samples_walks_the_recording_a_sample_at_a_time(dao, make_region):
     """Grouped by tick, in order, with each row's hash beside it."""
-    high = make_region(base_addr=0x20000)
-    low = make_region(base_addr=0x10000)
+    high = _exec_region(make_region, 0x20000)
+    low = _exec_region(make_region, 0x10000)
     rid = dao.create_recording(1000, "p.exe", 0)
-    dao.add_sample(rid, 1_000, _state(1_000), [high, low], {0x10000: b"aaa"})
+    dao.add_sample(rid, 1_000, _state(1_000), [high, low],
+                   {0x10000: b"aaa", 0x20000: b"zzz"})
     dao.add_sample(rid, 2_000, _state(2_000), [low], {0x10000: b"bbb"})
 
-    walked = list(dao.region_samples(rid))
+    walked = _walk(dao, rid)
     assert [ts for ts, _, _ in walked] == [1_000, 2_000]
     # Ordered within the sample, so the two ends of a comparison line up.
     assert [r.base_addr for r in walked[0][1]] == [0x10000, 0x20000]
-    assert list(walked[0][2]) == [0x10000]   # only the row that captured a head
     assert walked[0][2][0x10000] != walked[1][2][0x10000]
 
 
-def test_region_samples_leaves_out_a_row_with_no_hash(dao, make_region):
-    """A row from before hashes were stored reads as "cannot tell".
+def test_region_samples_keeps_a_sample_that_has_nothing_to_compare(dao,
+                                                                   make_region):
+    """An empty sample is still a sample, and dropping it would join its
+    neighbours into a pair they are not.
 
-    The digest map is what a comparison asks, and an address missing from it
-    stops the comparison rather than answering it, exactly as
-    ``head_hashes_at`` leaves the same row out for a single sample.
+    The rows left out here are a row with no head hash, which reads as
+    "cannot tell" exactly as ``head_hashes_at`` leaves it out, and a row that
+    is not executable, which no content comparison can involve.
     """
     rid = dao.create_recording(1000, "p.exe", 0)
-    dao.add_sample(rid, 1_000, _state(1_000), [make_region()])
-    [(_, regions, digests)] = list(dao.region_samples(rid))
-    assert len(regions) == 1 and digests == {}
+    dao.add_sample(rid, 1_000, _state(1_000),
+                   [_exec_region(make_region, 0x10000)], {0x10000: b"aaa"})
+    dao.add_sample(rid, 2_000, _state(2_000),
+                   [_exec_region(make_region, 0x10000)])       # no head
+    dao.add_sample(rid, 3_000, _state(3_000), [make_region(base_addr=0x30000)])
+
+    walked = _walk(dao, rid)
+    assert [ts for ts, _, _ in walked] == [1_000, 2_000, 3_000]
+    assert [len(regions) for _, regions, _ in walked] == [1, 0, 0]
+
+
+def test_region_samples_leaves_out_a_guard_page(dao, make_region):
+    """Execute plus the guard bit is not executable, and analytics says so.
+
+    The filter has to answer the way ``is_executable`` answers or the pass
+    would carry rows the detector then refuses, or worse, stop carrying rows
+    it would have accepted.
+    """
+    from memlapse.model.region import MEM_COMMIT, PAGE_EXECUTE_READ, PAGE_GUARD
+    guarded = make_region(base_addr=0x10000, state=MEM_COMMIT,
+                          protect=PAGE_EXECUTE_READ | PAGE_GUARD)
+    rid = dao.create_recording(1000, "p.exe", 0)
+    dao.add_sample(rid, 1_000, _state(1_000), [guarded], {0x10000: b"aaa"})
+    [(_, regions, digests)] = _walk(dao, rid)
+    assert regions == [] and digests == {}
 
 
 def test_region_samples_of_an_unknown_recording_yields_nothing(dao):
-    assert list(dao.region_samples(999)) == []
+    assert _walk(dao, 999) == []
