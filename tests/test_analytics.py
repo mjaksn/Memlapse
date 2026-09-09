@@ -3,9 +3,14 @@
 import pytest
 
 from memlapse.analytics import (
-    ENTROPY_PACKED, Mover, RegionVerdict, SeriesBuffer, is_executable,
-    leak_rate_bytes_per_sec, linreg_slope, longest_nop_run, score_region,
-    shannon_entropy, top_movers, zscore,
+    ENTROPY_PACKED, Allowlist, AllowlistEntry, Mover, RULE_HIGH_ENTROPY,
+    RULE_IMAGE_REWRITTEN,
+    RULE_MAPPED_EXEC, RULE_NOP_SLED, RULE_PE_HEADER, RULE_PRIVATE_EXEC,
+    RULE_REWRITTEN, RULE_RWX, RULE_THREAD_START, RULE_UNPACKED,
+    Reason, RegionVerdict, SeriesBuffer, is_executable,
+    leak_rate_bytes_per_sec,
+    linreg_slope, longest_nop_run, score_region, shannon_entropy,
+    top_movers, zscore,
 )
 from memlapse.model.region import (
     MEM_COMMIT, MEM_IMAGE, MEM_MAPPED, MEM_PRIVATE, MEM_RESERVE, PAGE_EXECUTE_READ,
@@ -15,6 +20,11 @@ from memlapse.model.region import (
 
 def _region(protect, type_, state=MEM_COMMIT, base=0x1000, size=0x2000):
     return Region(base_addr=base, size=size, state=state, protect=protect, type=type_)
+
+
+def _rules(verdict):
+    """The rule ids that fired, which is what an allowlist entry names."""
+    return {r.rule for r in verdict.reasons}
 
 
 # --- SeriesBuffer ----------------------------------------------------------
@@ -138,9 +148,19 @@ def test_longest_nop_run_empty():
 
 
 # --- RegionVerdict ---------------------------------------------------------
+def _verdict(score):
+    """A verdict whose single reason accounts for the whole score.
+
+    The score is the sum of its reasons' points, which is what lets an
+    allowlisted rule be subtracted, so a verdict built by hand has to
+    honour that too.
+    """
+    return RegionVerdict(0, 0, score, (Reason("x", "x", score),))
+
+
 def test_region_verdict_suspicious_flag():
     assert RegionVerdict(0, 0, 0, ()).suspicious is False
-    assert RegionVerdict(0, 0, 10, ("x",)).suspicious is True
+    assert _verdict(10).suspicious is True
 
 
 # --- score_region ----------------------------------------------------------
@@ -157,13 +177,13 @@ def test_score_region_ignores_non_executable():
 def test_score_region_private_exec_is_core_signal():
     v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE))
     assert v.score == 50
-    assert "unbacked" in v.reasons[0]
+    assert _rules(v) == {RULE_PRIVATE_EXEC}
 
 
 def test_score_region_mapped_exec_scores_lower():
     v = score_region(_region(PAGE_EXECUTE_READ, MEM_MAPPED))
     assert v.score == 30
-    assert "stomping" in v.reasons[0]
+    assert _rules(v) == {RULE_MAPPED_EXEC}
 
 
 def test_score_region_image_exec_is_benign():
@@ -174,31 +194,31 @@ def test_score_region_image_exec_is_benign():
 def test_score_region_rwx_adds_points():
     v = score_region(_region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE))
     assert v.score == 75  # 50 private + 25 RWX
-    assert any("RWX" in r for r in v.reasons)
+    assert _rules(v) == {RULE_PRIVATE_EXEC, RULE_RWX}
 
 
 def test_score_region_mz_header_flagged():
     v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE), head=b"MZ" + b"\x00" * 10)
     assert v.score == 70  # 50 + 20 MZ
-    assert any("PE header" in r for r in v.reasons)
+    assert RULE_PE_HEADER in _rules(v)
 
 
 def test_score_region_nop_sled_flagged():
     v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE), head=b"\x90" * 16)
     assert v.score == 60  # 50 + 10 NOP
-    assert any("NOP" in r for r in v.reasons)
+    assert RULE_NOP_SLED in _rules(v)
 
 
 def test_score_region_high_entropy_flagged():
     v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE), head=bytes(range(256)))
     assert v.score == 60  # 50 + 10 entropy
-    assert any("entropy" in r for r in v.reasons)
+    assert RULE_HIGH_ENTROPY in _rules(v)
 
 
 def test_score_region_low_entropy_not_flagged():
     v = score_region(_region(PAGE_EXECUTE_READ, MEM_PRIVATE), head=b"\x00" * 64)
     assert v.score == 50
-    assert not any("entropy" in r for r in v.reasons)
+    assert RULE_HIGH_ENTROPY not in _rules(v)
 
 
 def test_score_region_caps_at_100():
@@ -282,15 +302,16 @@ def test_rewritten_regions_checks_each_region_independently():
 def test_score_region_rewritten_private_adds_points():
     v = score_region(_snap(), rewritten=True)
     assert v.score == 50 + REWRITTEN_POINTS
-    assert any("rewritten in place" in r for r in v.reasons)
+    assert RULE_REWRITTEN in _rules(v)
 
 
 def test_score_region_rewritten_image_weighs_more():
     v = score_region(_snap(type=_IMAGE), rewritten=True)
     assert v.score == IMAGE_REWRITTEN_POINTS
-    assert v.reasons == (
+    assert _rules(v) == {RULE_IMAGE_REWRITTEN}
+    assert [r.text for r in v.reasons] == [
         "image code rewritten in memory (inline hook or module stomping) [T1055]",
-    )
+    ]
 
 
 def test_score_region_rewritten_ignored_for_non_executable():
@@ -304,16 +325,43 @@ def test_reasons_carry_their_attack_technique():
         ATTACK_INJECTION, ATTACK_PACKING, ATTACK_REFLECTIVE,
     )
     v = score_region(_snap(), head=b"MZ" + bytes(range(256)))
-    tagged = {r.rsplit("[", 1)[-1].rstrip("]") for r in v.reasons if r.endswith("]")}
+    tagged = {r.text.rsplit("[", 1)[-1].rstrip("]")
+              for r in v.reasons if r.text.endswith("]")}
     assert tagged == {ATTACK_INJECTION, ATTACK_REFLECTIVE, ATTACK_PACKING}
     mapped = score_region(_snap(type=MEM_MAPPED))
-    assert mapped.reasons[0].endswith(f"[{ATTACK_INJECTION}]")
+    assert mapped.reasons[0].text.endswith(f"[{ATTACK_INJECTION}]")
+
+
+# --- rule ids are schema -------------------------------------------------
+def test_rule_ids_are_unique_and_spelled_as_shipped():
+    """An allowlist entry names a rule id, and a recording will store one.
+
+    Renaming a shipped id silently changes what an existing entry means, so
+    the spellings are pinned here rather than left to the constants alone.
+    """
+    ids = [RULE_PRIVATE_EXEC, RULE_MAPPED_EXEC, RULE_RWX, RULE_THREAD_START,
+           RULE_PE_HEADER, RULE_NOP_SLED, RULE_HIGH_ENTROPY, RULE_UNPACKED,
+           RULE_REWRITTEN, RULE_IMAGE_REWRITTEN]
+    assert len(set(ids)) == len(ids)
+    assert ids == ["private-exec", "mapped-exec", "rwx", "thread-start",
+                   "pe-header", "nop-sled", "high-entropy", "unpacked",
+                   "rewritten", "image-rewritten"]
+
+
+def test_each_reason_carries_the_points_it_added():
+    """The score has to be derivable from the reasons, or suppressing one
+    later would need a second set of books to subtract from."""
+    v = score_region(_snap(protect=PAGE_EXECUTE_READWRITE),
+                     head=b"MZ" + b"\x00" * 32)
+    assert v.score == 95  # 50 private + 25 RWX + 20 MZ, none of them capped
+    assert sum(r.points for r in v.reasons) == v.score
+    assert all(r.points > 0 for r in v.reasons)
 
 
 def test_rwx_and_nop_sled_carry_no_technique():
     """Neither maps to an ATT&CK technique, so neither invents one."""
     reasons = score_region(_snap(protect=PAGE_EXECUTE_READWRITE), head=b"\x90" * 64).reasons
-    assert [r for r in reasons if not r.endswith("]")] == [
+    assert [r.text for r in reasons if not r.text.endswith("]")] == [
         "writable + executable (RWX)", "NOP sled",
     ]
 
@@ -321,7 +369,7 @@ def test_rwx_and_nop_sled_carry_no_technique():
 # --- triage bands ----------------------------------------------------------
 def test_verdict_band_edges():
     from memlapse.analytics import LIKELY_SCORE, REVIEW_SCORE
-    band = lambda score: RegionVerdict(0, 0, score, ()).band
+    band = lambda score: _verdict(score).band
     assert band(0) == ""
     assert band(1) == "low"
     assert band(REVIEW_SCORE - 1) == "low"
@@ -373,7 +421,7 @@ def test_score_region_thread_start_in_unbacked_memory():
     v = score_region(_snap(), thread_start=True)
     assert v.score == 50 + THREAD_START_POINTS
     assert v.band == "likely injection"
-    assert any("a thread starts here" in r for r in v.reasons)
+    assert RULE_THREAD_START in _rules(v)
 
 
 def test_score_region_thread_start_in_an_image_is_normal():
@@ -428,4 +476,105 @@ def test_score_region_unpacked_stacks_with_rewritten():
     v = score_region(_snap(), head=_CODE, rewritten=True, unpacked=True)
     assert v.score == 50 + REWRITTEN_POINTS + UNPACKED_POINTS  # 85
     assert v.band == "likely injection"
-    assert any("unpacked in place" in r for r in v.reasons)
+    assert RULE_UNPACKED in _rules(v)
+
+
+# --- the allowlist: suppress a verdict, never a row ------------------------
+def test_allowlist_is_keyed_on_the_image_name_case_insensitively():
+    book = Allowlist([AllowlistEntry("claude.exe", RULE_PRIVATE_EXEC, "V8 JIT"),
+                      AllowlistEntry("claude.exe", RULE_RWX, "V8 JIT")])
+    assert book.rules_for("CLAUDE.exe") == {RULE_PRIVATE_EXEC, RULE_RWX}
+    assert book.rules_for("notepad.exe") == frozenset()
+    assert bool(book) and not bool(Allowlist())
+
+
+def test_an_unallowlisted_region_scores_exactly_as_before():
+    region = _region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
+    v = score_region(region)
+    assert v.score == 75 and v.effective_score == 75
+    assert v.band == "likely injection"
+    assert not any(r.allowed for r in v.reasons)
+
+
+def test_allowlisting_every_fired_rule_keeps_the_row_and_the_score():
+    """The JIT case: the number stays, the verdict does not."""
+    region = _region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
+    v = score_region(region, allowed={RULE_PRIVATE_EXEC, RULE_RWX})
+    assert v.score == 75          # raw, so the analyst sees what fired
+    assert v.effective_score == 0
+    assert v.band == "allowlisted"
+    assert [r.rule for r in v.reasons] == [RULE_PRIVATE_EXEC, RULE_RWX]
+    assert all(r.allowed for r in v.reasons)
+
+
+def test_allowlisting_one_rule_leaves_the_others_counting():
+    """An entry is scoped to a heuristic, not to a process wholesale."""
+    region = _region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
+    v = score_region(region, allowed={RULE_PRIVATE_EXEC})
+    assert v.score == 75 and v.effective_score == 25   # RWX still counts
+    assert v.band == "low"
+    assert [r.allowed for r in v.reasons] == [True, False]
+
+
+def test_a_stomped_jit_host_still_scores_on_its_content():
+    """The case the scoping exists for: exempting the executable-private
+    rule must not exempt the PE header that says something was loaded."""
+    region = _region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
+    v = score_region(region, head=b"MZ" + bytes(range(256)),
+                     allowed={RULE_PRIVATE_EXEC, RULE_RWX})
+    assert v.band == "review"                    # 20 MZ + 10 entropy
+    assert v.effective_score == 30
+    assert {r.rule for r in v.reasons if not r.allowed} == {
+        RULE_PE_HEADER, RULE_HIGH_ENTROPY}
+
+
+def test_removing_an_entry_restores_the_verdict():
+    """Nothing is recomputed or discarded, so the finding just comes back."""
+    region = _region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE)
+    book = Allowlist([AllowlistEntry("jit.exe", RULE_PRIVATE_EXEC),
+                      AllowlistEntry("jit.exe", RULE_RWX)])
+    muted = score_region(region, allowed=book.rules_for("jit.exe"))
+    restored = score_region(region, allowed=Allowlist().rules_for("jit.exe"))
+    assert muted.band == "allowlisted" and restored.band == "likely injection"
+    assert muted.score == restored.score
+    assert [r.text for r in muted.reasons] == [r.text for r in restored.reasons]
+
+
+def test_a_benign_region_is_not_called_allowlisted():
+    """Nothing fired, so there is no verdict to suppress."""
+    v = score_region(_region(PAGE_EXECUTE_READ, MEM_IMAGE),
+                     allowed={RULE_PRIVATE_EXEC, RULE_RWX})
+    assert v.score == 0 and v.band == "" and v.effective_score == 0
+
+
+def test_allowlist_accepts_entries_that_can_only_be_read_once():
+    """Storage will hand it a cursor, which indexing would consume."""
+    book = Allowlist(AllowlistEntry("jit.exe", rule)
+                     for rule in (RULE_PRIVATE_EXEC, RULE_RWX))
+    assert book.rules_for("jit.exe") == {RULE_PRIVATE_EXEC, RULE_RWX}
+    assert len(book.entries) == 2
+
+
+def test_every_rule_scores_something_so_excusing_them_all_reaches_zero():
+    """`band` calls a region allowlisted when no points are left, which
+
+    means the same as "every rule was excused" only while no rule can fire
+    for nothing. A new rule worth zero points would quietly break that, so
+    the whole vocabulary is exercised here rather than one case of it.
+    """
+    head = b"MZ" + b"\x90" * 32 + bytes(range(256))
+    fired = {}
+    for verdict in (
+        score_region(_region(PAGE_EXECUTE_READWRITE, MEM_PRIVATE), head=head,
+                     thread_start=True, rewritten=True, unpacked=True),
+        score_region(_region(PAGE_EXECUTE_READ, MEM_MAPPED)),
+        score_region(_region(PAGE_EXECUTE_READ, MEM_IMAGE), rewritten=True),
+    ):
+        for r in verdict.reasons:
+            fired[r.rule] = r.points
+    assert set(fired) == {RULE_PRIVATE_EXEC, RULE_MAPPED_EXEC, RULE_RWX,
+                          RULE_THREAD_START, RULE_PE_HEADER, RULE_NOP_SLED,
+                          RULE_HIGH_ENTROPY, RULE_UNPACKED, RULE_REWRITTEN,
+                          RULE_IMAGE_REWRITTEN}
+    assert all(points > 0 for points in fired.values())
+

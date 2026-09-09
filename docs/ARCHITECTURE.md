@@ -402,6 +402,9 @@ flowchart TD
     R -- no --> CAP["score = min(sum, 100)"]
     RI --> CAP
     RW --> CAP
+    CAP --> AL{"points left after excusing<br/>this image's allowlisted rules?"}
+    AL -- none --> ALW["band = allowlisted<br/>(score kept, tint neutral)"]
+    AL -- some --> EFF["band from those points<br/>(the excused ones subtracted)"]
 ```
 
 ### End-to-end data flow
@@ -527,10 +530,13 @@ NyxWatch author acknowledges apply here:
 
 1. **JIT false positives.** .NET, the JVM, and JavaScript engines (V8) legally
    allocate private, executable (sometimes RWX) memory for generated code. A
-   naive scan lights them up. Mitigation is an allowlist / behavioural context,
-   which is why the thresholds above must be tuned against a JIT-heavy baseline.
-   The shape that allowlist should take is
-   [set out below](#planned-allowlist-semantics).
+   naive scan lights them up: measured unelevated on this machine on
+   2026-09-08, 996 regions reached the likely injection band with nothing
+   malicious running. The allowlist [below](#shipped-allowlist-semantics)
+   takes that to 33, but it is a list someone has to write and keep, and it
+   is keyed on an image name, so it excuses anything that adopts one.
+   Behavioural context would be the stronger answer, which is why the
+   thresholds above still want tuning against a JIT-heavy baseline.
 2. **RW→RX flip evasion.** Mature loaders allocate `PAGE_READWRITE`, write the
    payload, then `VirtualProtect` to `PAGE_EXECUTE_READ`, never holding RWX. A
    single snapshot can miss this. The **temporal** detector below closes it.
@@ -605,27 +611,61 @@ allocates RW, waits for the user to click something, and flips to RX a minute
 later is the same pattern stretched over a gap that consecutive-sample logic
 cannot express.
 
-### Planned: allowlist semantics
+### Shipped: allowlist semantics
 
-Whatever form the JIT allowlist in limitation (1) takes, it suppresses a
-verdict, never a row. The rules a commercial platform uses for this transfer
-directly ([RESEARCH_NOTES.md](RESEARCH_NOTES.md) 7.1 and 7.3):
+`analytics.Allowlist` holds `AllowlistEntry(image_name, rule, note)` and
+answers `rules_for(image_name)` with the rule ids exempted for that process.
+The region view looks that up once per live refresh and hands the ids to
+`RegionTableModel.set_regions`, which passes them to `score_region` as
+`allowed`. It suppresses a verdict, never a row, following the rules a
+commercial platform uses ([RESEARCH_NOTES.md](RESEARCH_NOTES.md) 7.1 and 7.3):
 
-- **Keep the row and the raw score.** An allowlisted region stays in the table
-  with the score the heuristics gave it, under a distinct "allowlisted" verdict
-  in place of the heat tint. Filtering it out hides the one thing an analyst
-  reviewing a false positive needs to see.
-- **Key it on something durable.** An image path plus its publisher, or a head
-  hash, and never a PID, which Windows reuses within minutes.
-- **Scope it to one heuristic.** An entry should exempt a JIT host from the
-  executable-private rule without exempting it from the `MZ` or NOP sled rules,
-  so a stomped CLR still scores.
-- **Write it into the recording.** A replay on another machine then scores the
-  same way, and the reader can see what was excluded, which is what makes a
-  recording evidence someone else can check.
-- **Make removal restore the verdict.** Because the entry suppresses the verdict
-  and leaves the score alone, deleting it brings the original finding back with
-  no history to recompute.
+- **Keep the row and the raw score.** An allowlisted rule still fires and still
+  appears in the reasons, marked "(allowlisted)" in the tooltip.
+  `RegionVerdict.score` is untouched and the table still shows it. What changes
+  is `effective_score`, the sum of the rules that were not excused, and the
+  band comes from that, as does the heat tint. A region left with no points
+  at all bands as `allowlisted` and is tinted neutral grey instead of by
+  heat; since every rule scores something, that is the same as every rule
+  that fired having been excused. Filtering the row out would hide the one
+  thing an analyst reviewing a false positive needs to see.
+- **Scope it to one heuristic.** An entry names exactly one rule. Exempting a
+  JIT host from `private-exec` and `rwx` leaves `pe-header`, `nop-sled` and the
+  rest counting, so a stomped CLR still reaches the review band on its content.
+- **Make removal restore the verdict.** Nothing is recomputed or discarded, so
+  deleting an entry brings the original band back with no history to replay.
+  That falls out of the arithmetic rather than being a feature: a score is the
+  sum of its reasons' points, so an excused rule is subtracted, never erased.
+- **Every rule has a stable id.** `RULE_PRIVATE_EXEC` and its siblings are the
+  vocabulary an entry is written in, and they will key rows in a recording, so
+  a shipped id is schema and is never renamed. The prose beside it is free to
+  change.
+- **The header agrees with the bands.** The count of regions "rewritten while
+  watching" comes from the verdicts rather than from the change set, so the
+  header cannot announce a finding the allowlist has already excused.
+
+Measured on this machine on 2026-09-08, unelevated, with entries for ten
+common JIT hosts on `private-exec` and `rwx` only: regions in the likely
+injection band fell from 996 to 33 across every readable process, and 1015
+landed in the allowlisted band. The review band barely moved, 396 to 345,
+because it is mostly `mapped-exec` on .NET images, which is a different
+problem this does not claim to solve. The absolute counts depend on what is
+running; the before and after come from the same survey.
+
+### Planned: the rest of the allowlist
+
+- **A durable key.** Entries are keyed on the process image name, which the
+  bulk query returns without a handle and a recording already stores. A name
+  alone excuses anything that adopts it; an image path plus its publisher, or
+  a head hash, is the intended upgrade. A PID is never a key, since Windows
+  reuses those within minutes.
+- **Write it into the recording.** Entries live only in memory, so nothing
+  survives a restart and a replay elsewhere scores without them. Storing them
+  per recording is what would let a replay on another machine score the same
+  way and show a reader what was excluded, which is what makes a recording
+  evidence someone else can check.
+- **An affordance to create one.** There is no UI to add or delete an entry
+  yet; a caller builds the `Allowlist` and passes it to `RegionView`.
 
 ### References
 

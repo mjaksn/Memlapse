@@ -22,6 +22,7 @@ import os
 import tempfile
 from contextlib import suppress
 from pathlib import Path
+from typing import Collection
 
 from PySide6.QtCore import (
     QAbstractTableModel, QModelIndex, QObject, QRunnable, Qt, QThreadPool, QTimer,
@@ -34,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..analytics import (
+    ALLOWLISTED, Allowlist, RULE_IMAGE_REWRITTEN, RULE_REWRITTEN,
     RegionVerdict, regions_with_thread_starts, rewritten_regions, score_region,
     unpacked_regions,
 )
@@ -155,18 +157,25 @@ class RegionTableModel(QAbstractTableModel):
         # Suspicious rows get a heat-tinted background and a reason tooltip.
         if verdict.suspicious:
             if role == Qt.BackgroundRole:
-                red, green, blue = heat_color(verdict.score / 100.0)
+                if verdict.band == ALLOWLISTED:
+                    # Deliberately not a heat colour. The row stays, and the
+                    # score with it, but nothing here is asking to be read.
+                    return QColor(128, 128, 128, 60)
+                red, green, blue = heat_color(verdict.effective_score / 100.0)
                 return QColor(red, green, blue, 110)  # translucent over dark theme
             if role == Qt.ToolTipRole:
                 # Band first: the number alone does not say what to do with it.
-                return f"{verdict.band}: " + "; ".join(verdict.reasons)
+                return (f"{verdict.band}: " + "; ".join(
+                    f"{r.text} (allowlisted)" if r.allowed else r.text
+                    for r in verdict.reasons))
         return None
 
     def set_regions(self, rows: list[Region],
                     heads: dict[int, bytes] | None = None,
                     rewritten: set[int] | None = None,
                     thread_starts: set[int] | None = None,
-                    unpacked: set[int] | None = None) -> None:
+                    unpacked: set[int] | None = None,
+                    allowed: Collection[str] = ()) -> None:
         """Replace the rows and score each one.
 
         ``heads`` carries the head bytes by base address (read live, or
@@ -175,7 +184,10 @@ class RegionTableModel(QAbstractTableModel):
         live mode. Without heads only the structural signals apply.
         ``thread_starts`` carries the base addresses a thread starts in and
         ``unpacked`` those whose entropy fell to code-like values; both modes
-        can know either.
+        can know either. ``allowed`` is the rule ids exempted for the process
+        these regions belong to, which the caller looks up; the model is
+        handed the ids rather than the allowlist so it stays ignorant of what
+        an entry is keyed on.
         """
         heads = heads or {}
         rewritten = rewritten or set()
@@ -187,18 +199,34 @@ class RegionTableModel(QAbstractTableModel):
             score_region(r, head=heads.get(r.base_addr, b""),
                          rewritten=r.base_addr in rewritten,
                          thread_start=r.base_addr in thread_starts,
-                         unpacked=r.base_addr in unpacked)
+                         unpacked=r.base_addr in unpacked,
+                         allowed=allowed)
             for r in rows
         ]
         self.endResetModel()
+
+    def rewritten_count(self) -> int:
+        """Regions whose rewrite still counts, allowlisted ones excluded.
+
+        The header reports this rather than the size of the change set, so
+        it cannot announce findings the bands have already excused.
+        """
+        return sum(
+            1 for v in self._verdicts
+            if any(r.rule in (RULE_REWRITTEN, RULE_IMAGE_REWRITTEN)
+                   and not r.allowed for r in v.reasons)
+        )
 
     def region_at(self, row: int) -> Region | None:
         return self._rows[row] if 0 <= row < len(self._rows) else None
 
 
 class RegionView(QWidget):
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, allowlist: Allowlist | None = None) -> None:
         super().__init__(parent)
+        #: Rules excused per process. Empty until PR 2 loads saved entries;
+        #: an empty one scores exactly as the view did before it existed.
+        self._allowlist = allowlist or Allowlist()
         self._pid: int | None = None
         self._live = True  # live -> can read bytes; playback -> cannot
         #: Creation time of the instance the current map came from. With the
@@ -340,9 +368,12 @@ class RegionView(QWidget):
         self._live_unpacked = (self._live_unpacked & present) | fell
         self._prev_regions, self._prev_heads = regions, heads
         self._replace_rows(regions, heads, self._live_rewritten, thread_starts,
-                           self._live_unpacked)
+                           self._live_unpacked,
+                           self._allowlist.rules_for(name))
         note = "" if readable else "  (no read access, map only)"
-        flagged = len(self._live_rewritten)
+        # From the verdicts, not the change set: a rewrite this process is
+        # excused for is not a finding, so the header must not count it.
+        flagged = self.model.rewritten_count()
         change = f", {flagged} rewritten while watching" if flagged else ""
         self.header.setText(
             f"{name} ({pid}): {len(regions)} regions{change}{note}"
@@ -350,7 +381,7 @@ class RegionView(QWidget):
 
     def _replace_rows(self, regions: list[Region], heads: dict[int, bytes],
                       rewritten: set[int], thread_starts: set[int],
-                      unpacked: set[int]) -> None:
+                      unpacked: set[int], allowed: Collection[str] = ()) -> None:
         """Reset the model without losing the analyst's place.
 
         A model reset drops the current row silently, which would blank the
@@ -361,7 +392,7 @@ class RegionView(QWidget):
         current = self.model.region_at(self.table.currentIndex().row())
         scroll = self.table.verticalScrollBar().value()
         self.model.set_regions(regions, heads, rewritten, thread_starts,
-                               unpacked)
+                               unpacked, allowed)
         if current is not None:
             for row, r in enumerate(regions):
                 if r.base_addr == current.base_addr:

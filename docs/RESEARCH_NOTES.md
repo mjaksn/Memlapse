@@ -139,7 +139,7 @@ Process Injection"].
 **Implication.** The score is currently a property of the region alone. A small
 process-context multiplier (system processes, LSASS, browsers and shells up;
 known JIT hosts down) would rank the region table more usefully. It is the
-positive counterpart of the JIT allowlist that ARCHITECTURE.md already plans.
+positive counterpart of the JIT allowlist ARCHITECTURE.md now describes.
 
 ### 1.7 Cross-view detection of hidden processes. New
 
@@ -548,8 +548,8 @@ Suppressed detections keep score 0; allowlisted files keep their row with
 "Uninspected files have a score of -1" [V, p. 454]. Suppressing a verdict
 leaves the underlying score alone: "The threat score of the file does not
 change. However, the color of the bubble changes to gray" [V, p. 447]. The
-planned JIT allowlist should follow this: keep the region in the table with its
-raw score and a distinct "allowlisted" verdict, never filter it out.
+JIT allowlist follows this: it keeps the region in the table with its raw
+score and a distinct "allowlisted" verdict rather than filtering it out.
 
 **Process score is the maximum of its parts. New.** The Processes tab shows
 "the maximum threat score computed for the in-memory script execution" for
