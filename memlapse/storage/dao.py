@@ -239,14 +239,14 @@ class Dao:
     def region_samples(
         self, recording_id: int, *, state: int, protect_any: int,
         protect_none: int,
-    ) -> Iterator[tuple[int, list[Region], dict[int, bytes]]]:
+    ) -> Iterator[tuple[int, list[Region], dict[int, bytes], bool]]:
         """Every sample of a recording in order, carrying the comparable rows.
 
-        Yields ``(ts_us, regions, digests)`` per sample, which is what a pass
-        over a whole recording wants: the anchored reads below answer for one
-        moment each, so walking a recording through them costs two queries and
-        two MAX subqueries per sample, where this costs two queries for the
-        lot.
+        Yields ``(ts_us, regions, digests, observed)`` per sample, which is
+        what a pass over a whole recording wants: the anchored reads below
+        answer for one moment each, so walking a recording through them costs
+        two queries and two MAX subqueries per sample, where this costs two
+        queries for the lot.
 
         A row is only worth carrying if a content comparison could involve it,
         and that is three conditions: it is in ``state``, its protection has
