@@ -644,15 +644,17 @@ asks for a signal from outside the memory map on top of `LIKELY_SCORE`
 **Allowlisting is audited and reversible. Refines.** Suppressing a verdict
 logs the override "for auditing purposes", emits a new Uninspected event, and
 removing the entry re-enables analysis [V, p. 447, p. 453].
-**Shipped, in part.** Two of the three asks are in: the suppression is shown
-rather than silent (the row stays, the raw score stays, and the excused rule
-is marked "(allowlisted)" in the tooltip), and it is reversible with nothing
-to replay, since a score is the sum of its reasons and an excused rule is
-subtracted rather than erased. Playback applies the same entries as the live
-view, so a replay does not contradict the watch it records. What is missing
-is durability: the key is still an image name rather than an image path plus
-publisher or a head hash, entries are not written to the recording, and there
-is no audit log of who excused what and when.
+**Shipped, in part.** Of the three properties the source describes, two are
+in. Suppression is **shown rather than silent**: the row stays, the raw score
+stays, and the excused rule is marked "(allowlisted)" in the tooltip. It is
+**reversible**, with nothing to replay, since a score is the sum of its
+reasons and an excused rule is subtracted rather than erased. Playback looks
+an entry up the same way the live view does, so an entry means the same thing
+in a replay as in the watch that made it. The third, an **audit** of the
+override, is not: nothing records who excused what or when. Nor is the key
+durable, an image name rather than an image path plus publisher or a head
+hash, and entries are not written to the recording, so they do not survive a
+restart or travel with it.
 
 **Reputation of the backing image. New.** Reputation includes the publisher,
 whether the file is signed, the signing authority and a trust category, with

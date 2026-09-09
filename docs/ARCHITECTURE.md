@@ -342,8 +342,9 @@ mapping less trustworthy, not more.
 
 The total is capped at 100. Non-committed or non-executable regions
 short-circuit to score 0. When `head` is empty (no bytes captured, e.g. an
-unelevated live target or a pre-feature recording) the content signals are
-skipped and only the structural tier runs.
+unelevated live target or a pre-feature recording) the content and temporal
+signals are skipped; the structural tier still runs, and so does the thread
+tier, which asks the thread list rather than the memory.
 
 Supporting helpers, all pure and unit-tested (`tests/test_analytics.py`):
 
@@ -360,7 +361,7 @@ RESEARCH_NOTES.md 7.1 rather than on a measurement of this machine:
 | Band | Score | What it means |
 |---|---:|---|
 | low | 1 to 29 | Something tripped, not enough to spend time on. Shown and tinted all the same. |
-| review | `REVIEW_SCORE` = 30 to 74 | Worth a second look. Most JIT and EDR artefacts land here. |
+| review | `REVIEW_SCORE` = 30 to 74, **or 75 and above when every point came from the map** | Worth a second look. Most JIT and EDR artefacts land here. |
 | likely injection | `LIKELY_SCORE` = 75 and above, **and at least one point from outside the map** | Act on it. |
 | allowlisted | any, once an entry excuses every rule that fired | Someone has vouched for this. The row and the score stay; see [the allowlist](#shipped-allowlist-semantics). |
 
@@ -385,12 +386,15 @@ found starting in the region, or a change between two looks at it. Where a
 head was read, that is a statement about the bytes: they came back and said
 nothing. Where none could be read it is not, and the difference matters.
 A target that denies `PROCESS_VM_READ`, which is any other user's process on
-an unelevated run, yields no heads at all, so no content or temporal rule
-can fire for any of its regions and **the top band is unreachable for that
-process**. The same holds replaying a recording made against one. That is a
-real limit rather than a quiet one: the region view says which of the two
-reasons held a row back, and the live header already says "(no read access,
-map only)" for the process as a whole.
+an unelevated run, yields no heads at all, so **no content or temporal rule
+can fire for any of its regions**. The same holds replaying a recording made
+against one. The top band is not closed off even then: the thread tier asks
+the thread list rather than the memory, so private memory with a thread
+starting in it still reaches 75 on evidence the map did not supply. What is
+lost is everything that depends on the bytes. That is a real limit rather
+than a quiet one: the region view says which reason held a row back, and the
+live header already says "(no read access, map only)" for the process as a
+whole.
 
 This is calibration, not a new heuristic, and it was measured before it was
 written. `private-exec` (50) plus `rwx` (25) is exactly 75, exactly
@@ -412,10 +416,22 @@ stomping that carries a PE header. Asking for one point from outside the map
 drops exactly one, the pair itself, and nothing else at all.
 
 The table can now show a 75 in the review band, which reads as a bug unless
-the row accounts for it, so a held-back region says so in its tooltip:
-`held at review: nothing here but the shape of the map, which is what a JIT
-compiler leaves too`. The note appears only where the number and the band
-disagree, never on a region that simply scored too little.
+the row accounts for it, so a held-back region says so in its tooltip. There
+are three ways to arrive there and they are not the same news, so the note
+says which:
+
+- `held at review: nothing here but the shape of the map, which is what a JIT
+  compiler leaves too`, when the head was read and no content rule matched.
+  This is the only one of the three that is evidence of calm.
+- `held at review: the signals from outside the map are allowlisted here, so
+  only the shape of it still counts`, when a content or temporal rule did fire
+  and an entry excused it. Without this the row would list a PE header and
+  then claim nothing but the map was found, in the same sentence.
+- `held at review: no bytes could be read here, so nothing but the map and the
+  thread list had anything to say`, when no head was available at all.
+
+The note appears only where the number and the band disagree, never on a
+region that simply scored too little.
 
 ```mermaid
 flowchart TD
@@ -650,6 +666,22 @@ detector nobody sees: a region seen rewritten stays flagged, and counted in
 the header as "rewritten while watching", until it leaves the map or the
 analyst selects a process again, which starts the history afresh.
 
+**Playback does not carry it forward, and since the calibration that shows.**
+`PlaybackEngine.rewritten` compares the anchored sample with the one before
+it and nothing else, which is right for a mode that can scrub: the flag
+belongs to the moment it happened, and the analyst can move to that moment.
+The asymmetry is old, but it used to cost only points. A private RWX region
+scored 90 live and 75 replayed and both were "likely injection", because the
+band was a threshold on the number. Now the band turns on which rules are
+still counting, so the same region bands "likely injection" live and
+"review" at any replayed sample after the rewrite, held back as map shape
+alone. **A one-shot rewrite is therefore band-visible in a replay only at the
+sample it landed on**, and nothing on the timeline marks which sample that
+is. Carrying the flag forward in playback would fix the divergence and break
+something else, since a region rewritten once would then stay flagged for the
+rest of the recording with no way to scrub back behind it. Choosing between
+those is a design decision, not a defect to patch, and it is not made here.
+
 ### Planned: temporal RW→RX transition detector
 
 Because Memlapse *records over time*, it can do something a single-snapshot tool
@@ -709,12 +741,19 @@ commercial platform uses ([RESEARCH_NOTES.md](RESEARCH_NOTES.md) 7.1 and 7.3):
 - **The header agrees with the bands.** The count of regions "rewritten while
   watching" comes from the verdicts rather than from the change set, so the
   header cannot announce a finding the allowlist has already excused.
-- **Both modes apply it.** `show_recorded_regions` takes the recorded process
-  name and looks it up exactly as the live view looks up the process it is
-  watching, so replaying a watch reaches the watch's verdict. Scoring a
-  recording differently from the session it came from would make the replay
-  contradict the thing it is a record of, which is the one property a
-  recording has to keep.
+- **Both modes look an entry up the same way.** `show_recorded_regions` takes
+  the recorded process name and resolves it exactly as the live view resolves
+  the process it is watching, so an entry means the same thing in a replay as
+  in the watch that made it. Before this, a replay scored against an empty
+  allowlist while the watch scored against the real one, and the two
+  contradicted each other on the same region.
+
+  This is a claim about the allowlist and nothing wider. The two modes can
+  still band the same moment differently, for a reason that has nothing to do
+  with entries: the live view carries a rewrite forward (see [the content
+  change detector](#shipped-content-change-detector)) while playback compares
+  only the anchored sample with the one before it. Both are deliberate. The
+  consequence is recorded there.
 
 Measured on this machine on 2026-09-08, unelevated, with entries for ten
 common JIT hosts on `private-exec` and `rwx` only: regions in the likely

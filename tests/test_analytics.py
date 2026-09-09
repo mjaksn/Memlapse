@@ -614,7 +614,13 @@ def test_a_benign_region_is_not_called_allowlisted():
 
 
 def test_allowlist_accepts_entries_that_can_only_be_read_once():
-    """Storage will hand it a cursor, which indexing would consume."""
+    """A one-shot iterable survives, because entries are walked exactly once.
+
+    The constructor materialises before building the lookup, so a generator or
+    a database cursor works. That is worth pinning: the obvious refactor, two
+    passes over the argument, would leave the second one empty and silently
+    excuse nothing.
+    """
     book = Allowlist(AllowlistEntry("jit.exe", rule)
                      for rule in (RULE_PRIVATE_EXEC, RULE_RWX))
     assert book.rules_for("jit.exe") == {RULE_PRIVATE_EXEC, RULE_RWX}

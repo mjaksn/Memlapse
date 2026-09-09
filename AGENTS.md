@@ -61,8 +61,8 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 362 passed with 100 percent line and branch
-coverage (2026-09-08).
+(2026-09-06); the test run is 373 passed with 100 percent line and branch
+coverage (2026-09-09).
 
 ## Conventions
 
@@ -131,6 +131,12 @@ coverage (2026-09-08).
   number taken by something else; a refresh that finds a different instance ends
   the watch instead of adopting the map, or the temporal signals would compare
   two unrelated processes and call the difference injected code.
+- The creation time does not catch the other half of that. An open handle pins
+  the pid, so a target that exits while watched keeps both its number and its
+  creation time, and `VirtualQueryEx` is then simply refused. The walk ends at
+  the first call and returns an empty list, which is why `regions()` asks
+  `has_exited()` before handing one back and raises instead: a live process
+  always has mapped memory, so an empty map is a refusal, never an answer.
 - Recordings are stored per user under `%LOCALAPPDATA%\Memlapse\memlapse.db`. Recordings
   made under the old name live in a `MemDo` folder beside it and are not picked up.
 - `git grep -P` handles Unicode escapes; plain `grep -P` on this machine does not, and
