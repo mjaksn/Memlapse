@@ -1,9 +1,11 @@
-"""Dependency-free analysis helpers powering the dashboard's interpret layer.
+"""Dependency-free analysis helpers: dashboard statistics and region scoring.
 
 Pure Python (no numpy) to match the project's minimal-dependency model layer,
-and unit-testable without Qt. Everything here is small: a ring buffer for time
+and unit-testable without Qt. The first half is small: a ring buffer for time
 series, a least-squares slope for leak detection, a z-score for anomaly
-spikes, and a top-movers diff.
+spikes, and a top-movers diff, all for the dashboard's interpret strip. The
+second half, from "in-memory injection heuristics" below, scores a region for
+signs of injected code and is shared by the live region view and playback.
 """
 
 from __future__ import annotations
@@ -181,8 +183,8 @@ REVIEW_SCORE = 30
 LIKELY_SCORE = 75
 
 #: MITRE ATT&CK technique each reason maps to, appended to the reason string
-#: so a tooltip and an export both name the technique the same way. Signals
-#: with no honest mapping carry none.
+#: so the tooltip names the technique as ATT&CK does, and any later export of
+#: the same finding will too. Signals with no honest mapping carry none.
 ATTACK_INJECTION = "T1055"      # Process Injection
 ATTACK_REFLECTIVE = "T1620"     # Reflective Code Loading
 ATTACK_PACKING = "T1027.002"    # Obfuscated Files or Information: Software Packing
@@ -399,8 +401,10 @@ class RegionVerdict:
         change between two looks at it. Measured on this machine on
         2026-09-08, across the processes whose memory could be read, that is
         the whole of the difference: every region in the top band scored on
-        nothing but private plus RWX. Where nothing can be read the top band
-        is unreachable; see :attr:`map_shape_only`.
+        nothing but private plus RWX. Where nothing can be read every
+        content and temporal rule stays silent, but the thread tier asks the
+        thread list rather than the memory, so the top band stays reachable;
+        see :attr:`map_shape_only`.
         """
         if self.score <= 0:
             return ""

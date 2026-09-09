@@ -1,10 +1,11 @@
 """RegionSampler, records a process's memory map over time.
 
 Runs on its own QThread. Each tick it captures process-wide stats (working
-set, private bytes, thread count), the full VirtualQueryEx region map, and the
-Win32 start address of every thread it can query, and writes them as one
-sample to SQLite. This is the process-wide sampling that
-powers playback; per-thread attribution comes later via ETW.
+set, private bytes, thread count), the full VirtualQueryEx region map, the
+first HEAD_BYTES of every executable readable region, and the Win32 start
+address of every thread it can query, and writes them as one sample to
+SQLite. This is the process-wide sampling that powers playback; per-thread
+attribution comes later via ETW.
 
 The sampler owns its own DB connection (opened inside run(), on the sampler
 thread) because SQLite connections cannot cross threads.

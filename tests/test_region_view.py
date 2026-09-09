@@ -858,8 +858,8 @@ def test_the_held_back_note_keys_on_the_points_that_are_left(rmodel):
 
     Every other tooltip test runs with an empty allowlist, where score and
     effective_score are equal and nothing tells the two apart. Excusing the
-    only non-map rule leaves a 50-point row that no rule held back: saying
-    it was held back would be a lie about a row nobody capped.
+    PE header and the RWX rule leaves a 50-point row that no rule held back:
+    saying it was held back would be a lie about a row nobody capped.
     """
     from PySide6.QtCore import Qt
     from memlapse.analytics import RULE_PE_HEADER, RULE_RWX
