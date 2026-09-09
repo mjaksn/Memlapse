@@ -31,6 +31,37 @@ def test_list_and_open(seeded_db):
         engine.close()
 
 
+def test_open_carries_the_recorded_image_name(seeded_db):
+    """The name is what an allowlist entry is keyed on.
+
+    Without it a replay scores against an empty allowlist while the watch it
+    replays scored against the real one, which is the disagreement the whole
+    lookup exists to prevent. Nothing else in the engine reads this, so only
+    an assertion here stops it being dropped in a refactor.
+    """
+    db, rid = seeded_db
+    engine = PlaybackEngine(db_path=db)
+    try:
+        assert engine.target_name == ""      # nothing open yet
+        engine.open(rid)
+        assert engine.target_name == "proc.exe"
+    finally:
+        engine.close()
+
+
+def test_open_on_an_unknown_recording_leaves_the_name_empty(seeded_db):
+    """An id with no row must not inherit the last recording's name."""
+    db, rid = seeded_db
+    engine = PlaybackEngine(db_path=db)
+    try:
+        engine.open(rid)
+        engine.open(rid + 999)
+        assert engine.target_name == ""
+        assert engine.sample_times == []
+    finally:
+        engine.close()
+
+
 def test_seek_returns_state_and_regions(seeded_db):
     db, rid = seeded_db
     engine = PlaybackEngine(db_path=db)
