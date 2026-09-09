@@ -452,3 +452,35 @@ def test_describe_rewrites_carries_past_an_hour():
     """
     assert (describe_rewrites([3_671_900_000], 0)
             == "rewritten once in this recording, at 01:01:11")
+
+
+def test_a_restart_on_a_sample_with_no_map_still_stops_the_comparison(tmp_db):
+    """The restart need not land on the sample being scored.
+
+    An anchor comes from region_snapshot and a restart timestamp from
+    process_snapshot, so a reuse recorded on a sample whose map came back
+    empty sits between the two samples being differenced without equalling
+    either end. Asking only whether the anchor is itself a restart lets that
+    pair through, and the two halves belong to different processes.
+    """
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 1, 1, 1, created_ft=111),
+                   [EXEC_REGION], {0x10000: b"aaa"})
+    # The reuse is noticed on a sample that carries no regions.
+    dao.add_sample(rid, 2_000, ProcState(2_000, 1000, 1, 1, 1, created_ft=222),
+                   [])
+    dao.add_sample(rid, 3_000, ProcState(3_000, 1000, 1, 1, 1, created_ft=222),
+                   [EXEC_REGION], {0x10000: b"zzz"})
+    conn.close()
+
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.instance_changes == [2_000]
+        # 1_000 and 3_000 are the anchor pair, and 2_000 is neither of them.
+        assert engine.rewritten(3_000) == set()
+        assert engine.rewrites == {}
+    finally:
+        engine.close()

@@ -112,8 +112,9 @@ class PlaybackEngine:
         Empty when nothing is open, at the first sample, or when no head
         changed. Like :meth:`heads`, separate from :meth:`seek` on purpose.
 
-        Also empty at a sample where the recorded process instance changed,
-        because the sample before it belongs to a different process that
+        Also empty when the recorded process instance changed anywhere
+        between the two samples being compared, because the earlier one then
+        belongs to a different process that
         happened to hold the same pid. The live view refuses the same
         comparison by ending the watch when a refresh finds another instance;
         a recording cannot end, so it declines the one comparison instead.
@@ -124,10 +125,16 @@ class PlaybackEngine:
         if self.recording_id is None:
             return set()
         anchor = self._dao.sample_at(self.recording_id, ts_us)
-        if anchor is None or anchor in self.instance_changes:
+        if anchor is None:
             return set()
         previous = self._dao.previous_sample_ts(self.recording_id, anchor)
         if previous is None:
+            return set()
+        # Any restart between the two, not only one landing on the anchor.
+        # The anchor comes from region_snapshot and a restart timestamp from
+        # process_snapshot, so a restart recorded on a sample whose map was
+        # empty sits between the pair without ever equalling either end.
+        if any(previous < ts <= anchor for ts in self.instance_changes):
             return set()
         return rewritten_regions(
             self._dao.regions_at(self.recording_id, previous),
