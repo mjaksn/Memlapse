@@ -69,10 +69,19 @@ def walk_spells(
     a row the spell it is actually in, rather than everything the address
     has ever done.
 
-    A sample whose map came back empty closes nothing. Nothing was seen
-    that tick, which is not the same as everything having been freed, and
-    treating it as a free would cut every spell in the recording in two
-    every time a sample could not be read.
+    A sample that held no map at all closes nothing. Nothing was seen that
+    tick, which is not the same as everything having been freed, and treating
+    it as a free would cut every spell in two whenever a sample could not be
+    read. The test is whether the sample had region rows, not whether any of
+    them were comparable: a map that was seen and holds no executable,
+    readable region under this identity has said the region is not there in
+    the form the history is about, and the spell ends.
+
+    That leaves one imprecision, deliberately. A region present in the map but
+    with no head captured this tick is not comparable, so its spell ends and a
+    new one begins when the bytes come back. That splits a history rather than
+    merging two, the same safe direction the identity rule takes with a
+    protection change.
     """
     spells: dict[tuple[int, int, int, int],
                  list[list]] = {}
@@ -83,13 +92,13 @@ def walk_spells(
     walk = dao.region_samples(
         recording_id, state=MEM_COMMIT, protect_any=EXEC_MASK,
         protect_none=PAGE_GUARD)
-    for ts_us, regions, digests in walk:
+    for ts_us, regions, digests, observed in walk:
         if ts_us in restarts:
             # A different process holds the pid now, so nothing that was
             # open belongs to what is about to appear.
             before, before_digests, live = [], {}, {}
         shown = {r.base_addr: r for r in regions}
-        if regions:
+        if observed:
             present = {region_identity(r) for r in regions}
             for identity in list(live):
                 if identity not in present:

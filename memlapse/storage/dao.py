@@ -268,6 +268,10 @@ class Dao:
         meaning. The ticks therefore come from ``process_snapshot``, the one
         table with a row per sample whatever the map held.
 
+        Yields ``(ts_us, regions, digests, observed)``. ``observed`` is False
+        only when the sample held no region rows at all; a sample whose rows
+        were all filtered out here is observed with nothing comparable in it.
+
         A generator on purpose: the caller holds two samples at a time, never
         the recording.
         """
@@ -276,9 +280,16 @@ class Dao:
         # sample with no regions at all would not appear, and the samples on
         # either side of it would be handed to the caller as consecutive,
         # which is the very thing the paragraph above promises not to do.
+        # The EXISTS says whether the sample held a map at all, which is not
+        # the same question as whether anything in it was comparable. A caller
+        # tracking what a region was doing needs both: no rows means nothing
+        # was seen that tick, while rows that all failed the filter mean the
+        # map was seen and the region was not in the part of it that counts.
+        # One indexed probe per sample, on ix_regionsnap_rec_ts.
         ticks = self.conn.execute(
-            "SELECT ts_us FROM process_snapshot WHERE recording_id=? "
-            "ORDER BY ts_us",
+            "SELECT p.ts_us, EXISTS(SELECT 1 FROM region_snapshot r "
+            "WHERE r.recording_id=p.recording_id AND r.ts_us=p.ts_us) "
+            "FROM process_snapshot p WHERE p.recording_id=? ORDER BY p.ts_us",
             (recording_id,),
         )
         rows = self.conn.execute(
@@ -290,7 +301,7 @@ class Dao:
         )
         samples = groupby(rows, key=lambda row: row[0])
         pending = next(samples, None)
-        for (ts_us,) in ticks:
+        for ts_us, observed in ticks:
             regions: list[Region] = []
             digests: dict[int, bytes] = {}
             if pending is not None and pending[0] == ts_us:
@@ -300,7 +311,7 @@ class Dao:
                                           type=type_))
                     digests[base] = bytes(digest)
                 pending = next(samples, None)
-            yield ts_us, regions, digests
+            yield ts_us, regions, digests, bool(observed)
 
     def sample_at(self, recording_id: int, ts_us: int) -> int | None:
         """Timestamp of the region sample at or before ts_us, or None.

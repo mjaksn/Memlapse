@@ -768,3 +768,38 @@ def test_closing_retires_a_walk_that_is_still_running(tmp_db):
     engine.rewrites_ready.connect(lambda: landed.append(True))
     in_flight.run()
     assert landed == []
+
+
+def test_a_protection_flip_ends_the_spell_even_alone_in_the_map(tmp_db):
+    """Seen and not comparable is not the same as not seen.
+
+    The region is the only executable one in this process, so when it turns
+    writable for a sample the comparable set is empty, exactly as it is when
+    a map could not be read at all. Treating the two alike keeps the spell
+    open across a protection change and hands the returning region the
+    rewrites its predecessor made, which is the thing `region_identity`
+    exists to prevent: a fresh identity gets a fresh history.
+    """
+    from memlapse.model.region import PAGE_READWRITE
+    writable = Region(EXEC_REGION.base_addr, EXEC_REGION.size, MEM_COMMIT,
+                      PAGE_READWRITE, MEM_PRIVATE)
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    for ts, region, head in ((1_000, EXEC_REGION, b"aaa"),
+                             (2_000, EXEC_REGION, b"bbb"),   # rewrite here
+                             (3_000, writable, b"bbb"),      # seen, not exec
+                             (4_000, EXEC_REGION, b"ccc"),
+                             (5_000, EXEC_REGION, b"ddd")):  # rewrite here
+        dao.add_sample(rid, ts, ProcState(ts, 1000, 1, 1, 1), [region],
+                       {region.base_addr: head})
+    conn.close()
+
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        # The map was seen at 3_000, so the executable identity was gone.
+        assert engine.rewrites_at(5_000) == {EXEC_IDENTITY: [5_000]}
+        assert engine.rewrites_at(2_000) == {EXEC_IDENTITY: [2_000]}
+    finally:
+        engine.close()

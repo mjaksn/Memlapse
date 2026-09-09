@@ -294,7 +294,7 @@ def test_region_samples_walks_the_recording_a_sample_at_a_time(dao, make_region)
     dao.add_sample(rid, 2_000, _state(2_000), [low], {0x10000: b"bbb"})
 
     walked = _walk(dao, rid)
-    assert [ts for ts, _, _ in walked] == [1_000, 2_000]
+    assert [ts for ts, _, _, _ in walked] == [1_000, 2_000]
     # Ordered within the sample, so the two ends of a comparison line up.
     assert [r.base_addr for r in walked[0][1]] == [0x10000, 0x20000]
     assert walked[0][2][0x10000] != walked[1][2][0x10000]
@@ -317,8 +317,11 @@ def test_region_samples_keeps_a_sample_that_has_nothing_to_compare(dao,
     dao.add_sample(rid, 3_000, _state(3_000), [make_region(base_addr=0x30000)])
 
     walked = _walk(dao, rid)
-    assert [ts for ts, _, _ in walked] == [1_000, 2_000, 3_000]
-    assert [len(regions) for _, regions, _ in walked] == [1, 0, 0]
+    assert [ts for ts, _, _, _ in walked] == [1_000, 2_000, 3_000]
+    assert [len(regions) for _, regions, _, _ in walked] == [1, 0, 0]
+    # Seen, with nothing in them the detector can use. Not the same as
+    # a sample that held no map at all, which the last flag reports.
+    assert [seen for _, _, _, seen in walked] == [True, True, True]
 
 
 def test_region_samples_leaves_out_a_guard_page(dao, make_region):
@@ -333,7 +336,7 @@ def test_region_samples_leaves_out_a_guard_page(dao, make_region):
                           protect=PAGE_EXECUTE_READ | PAGE_GUARD)
     rid = dao.create_recording(1000, "p.exe", 0)
     dao.add_sample(rid, 1_000, _state(1_000), [guarded], {0x10000: b"aaa"})
-    [(_, regions, digests)] = _walk(dao, rid)
+    [(_, regions, digests, _observed)] = _walk(dao, rid)
     assert regions == [] and digests == {}
 
 
@@ -360,8 +363,11 @@ def test_region_samples_keeps_a_sample_whose_map_was_empty(dao, make_region):
     dao.add_sample(rid, 3_000, _state(3_000), [region], {0x10000: b"bbb"})
 
     walked = _walk(dao, rid)
-    assert [ts for ts, _, _ in walked] == [1_000, 2_000, 3_000]
-    assert [len(regions) for _, regions, _ in walked] == [1, 0, 1]
+    assert [ts for ts, _, _, _ in walked] == [1_000, 2_000, 3_000]
+    assert [len(regions) for _, regions, _, _ in walked] == [1, 0, 1]
+    # The middle sample wrote no region row at all, so it is the one
+    # tick in this recording where nothing was observed.
+    assert [seen for _, _, _, seen in walked] == [True, False, True]
 
 def _entries():
     from memlapse.analytics import AllowlistEntry, RULE_PRIVATE_EXEC, RULE_RWX
