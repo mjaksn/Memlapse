@@ -517,6 +517,21 @@ def score_region(region: Region, *, head: bytes = b"",
     )
 
 
+def region_identity(region: Region) -> tuple[int, int, int, int]:
+    """What makes two samples show one allocation rather than two.
+
+    Base, size, protection and state together. A content comparison needs all
+    four to match before it will call a difference in the bytes a rewrite,
+    because a region that grew, changed protection, or was freed and
+    re-allocated at the same base is a different thing carrying whatever it
+    carries. Anything that files a rewrite under a region has to ask the same
+    question, or it will hand one allocation's history to another that merely
+    inherited its address. Windows reuses addresses freely, so that is
+    ordinary rather than exotic.
+    """
+    return (region.base_addr, region.size, region.protect, region.state)
+
+
 def rewritten_regions(prev_regions: Sequence[Region],
                       prev_digests: dict[int, bytes],
                       curr_regions: Sequence[Region],
@@ -542,7 +557,7 @@ def rewritten_regions(prev_regions: Sequence[Region],
         prev = before.get(curr.base_addr)
         if prev is None:
             continue
-        if (prev.size, prev.protect, prev.state) != (curr.size, curr.protect, curr.state):
+        if region_identity(prev) != region_identity(curr):
             continue
         if curr.state != MEM_COMMIT or not is_executable(curr.protect):
             continue

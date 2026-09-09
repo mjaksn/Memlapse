@@ -61,7 +61,7 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 410 passed with 100 percent line and branch
+(2026-09-06); the test run is 414 passed with 100 percent line and branch
 coverage (2026-09-09).
 
 ## Conventions
@@ -153,6 +153,11 @@ coverage (2026-09-09).
   a row that scores nothing still shows it, which is the case the feature
   exists for. Anything else a recording alone can answer belongs in the same
   place and not in `score_region`.
+- A whole-run answer is keyed on `analytics.region_identity`, never on a base
+  address, and restarts at every `Dao.instance_changes` timestamp. An address
+  outlives the allocation that held it and a pid outlives the process, so
+  either mistake hands one thing's history to another, and unlike a per-sample
+  flag it is then on screen at every sample of the recording.
 - Some facts have to be recorded because no later pass can recover them:
   `process_snapshot.can_read` and `.created_ft` are properties of the sample,
   not of the process. Both are nullable and NULL means "not recorded", which

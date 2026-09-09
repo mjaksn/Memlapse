@@ -220,10 +220,17 @@ def test_unpacked_before_open_is_empty(seeded_db):
 
 
 # --- rewrite_history(): what the whole recording knows ----------------------
+from memlapse.analytics import region_identity  # noqa: E402
+
+#: The region every fixture below records, and the identity its rewrites are
+#: filed under. An address alone is not a region: see `region_identity`.
+EXEC_REGION = Region(0x10000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+EXEC_IDENTITY = region_identity(EXEC_REGION)
+
+
 def _rewrite_db(tmp_db, heads_by_ts, region=None):
     """Record one executable region with the given head at each timestamp."""
-    region = region or Region(0x10000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ,
-                              MEM_PRIVATE)
+    region = region or EXEC_REGION
     conn = connect(tmp_db)
     dao = Dao(conn)
     rid = dao.create_recording(1000, "proc.exe", 0)
@@ -251,11 +258,13 @@ def test_rewrite_history_is_the_per_sample_flags_gathered(tmp_db):
     engine = PlaybackEngine(db_path=tmp_db)
     try:
         engine.open(rid)
-        by_sample: dict[int, list[int]] = {}
+        by_sample: dict[tuple[int, int, int, int], list[int]] = {}
         for ts in engine.sample_times:
+            _, regions = engine.seek(ts)
+            shown = {r.base_addr: r for r in regions}
             for base in engine.rewritten(ts):
-                by_sample.setdefault(base, []).append(ts)
-        assert by_sample == {0x10000: [2_000, 4_000]}   # the route being checked
+                by_sample.setdefault(region_identity(shown[base]), []).append(ts)
+        assert by_sample == {EXEC_IDENTITY: [2_000, 4_000]}  # the route checked
         assert engine.rewrite_history(rid) == by_sample
     finally:
         engine.close()
@@ -272,7 +281,7 @@ def test_open_computes_the_history_once(tmp_db):
     try:
         assert engine.rewrites == {}          # nothing open yet
         engine.open(rid)
-        assert engine.rewrites == {0x10000: [2_000]}
+        assert engine.rewrites == {EXEC_IDENTITY: [2_000]}
         engine.open(rid + 999)                # an id with no rows
         assert engine.rewrites == {}          # and no leftovers from the last
     finally:
@@ -293,7 +302,7 @@ def test_rewrite_history_orders_the_times_and_omits_the_quiet(tmp_db):
     engine = PlaybackEngine(db_path=tmp_db)
     try:
         engine.open(rid)
-        assert engine.rewrites == {0x10000: [2_000, 3_000]}
+        assert engine.rewrites == {EXEC_IDENTITY: [2_000, 3_000]}
     finally:
         engine.close()
 
@@ -343,6 +352,70 @@ def test_rewrite_history_will_not_join_a_region_across_a_sample_it_missed(tmp_db
         engine.open(rid)
         assert engine.rewritten(3_000) == set()   # the flag agrees
         assert engine.rewrites == {}
+    finally:
+        engine.close()
+
+
+def test_rewrite_history_does_not_compare_across_a_pid_reuse(tmp_db):
+    """Two processes under one pid are not one process that rewrote itself.
+
+    The sampler opens a fresh handle every tick, so a target that exits can
+    have its number taken mid-recording and a stranger's map appended to the
+    same recording. Differencing the two maps would report the stranger's
+    memory as executable code overwritten in place, which is the loudest
+    thing this tool says. The live view refuses the same comparison by ending
+    the watch; a recording declines the one comparison instead.
+
+    The whole-run surface needs this more than the flag does. A count and a
+    tick are shown at every sample, including the ones before the reuse,
+    where the header's warning about it is not shown yet.
+    """
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    for ts, created, head in ((1_000, 111, b"aaa"), (2_000, 111, b"aaa"),
+                              (3_000, 222, b"zzz"), (4_000, 222, b"zzz")):
+        dao.add_sample(rid, ts,
+                       ProcState(ts, 1000, 1, 1, 1, created_ft=created),
+                       [EXEC_REGION], {0x10000: head})
+    conn.close()
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.instance_changes == [3_000]   # the recording noticed
+        assert engine.rewrites == {}                # and the history did too
+        assert engine.rewritten(3_000) == set()     # both routes still agree
+    finally:
+        engine.close()
+
+
+def test_rewrite_history_does_not_lend_an_address_to_the_next_allocation(tmp_db):
+    """A region that inherits an address does not inherit its past.
+
+    Windows reuses virtual addresses, so a region freed and another allocated
+    at the same base later in the same recording is ordinary. Filing a
+    rewrite under the address alone would show the first one's history on the
+    second one's row, which is the whole run's version of a tick pointing at
+    a sample where nothing happened.
+    """
+    from memlapse.model.region import MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ
+    later = Region(0x10000, 64 * 1024, MEM_COMMIT, PAGE_EXECUTE_READ,
+                   MEM_PRIVATE)
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    for ts, head in ((1_000, b"aaa"), (2_000, b"bbb")):      # rewritten at 2000
+        dao.add_sample(rid, ts, ProcState(ts, 1000, 1, 1, 1), [EXEC_REGION],
+                       {0x10000: head})
+    dao.add_sample(rid, 3_000, ProcState(3_000, 1000, 1, 1, 1), [])  # freed
+    dao.add_sample(rid, 4_000, ProcState(4_000, 1000, 1, 1, 1), [later],
+                   {0x10000: b"ccc"})                        # a different one
+    conn.close()
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.rewrites == {EXEC_IDENTITY: [2_000]}
+        assert region_identity(later) not in engine.rewrites
     finally:
         engine.close()
 

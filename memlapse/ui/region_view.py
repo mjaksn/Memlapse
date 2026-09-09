@@ -37,8 +37,8 @@ from PySide6.QtWidgets import (
 from ..analytics import (
     ALLOWLISTED, Allowlist, LIKELY_SCORE, MAP_SHAPE_RULES,
     RULE_IMAGE_REWRITTEN, RULE_REWRITTEN,
-    RegionVerdict, regions_with_thread_starts, rewritten_regions, score_region,
-    unpacked_regions,
+    RegionVerdict, region_identity, regions_with_thread_starts,
+    rewritten_regions, score_region, unpacked_regions,
 )
 from ..collectors.region import read_heads
 from ..model.region import Region
@@ -139,12 +139,13 @@ class RegionTableModel(QAbstractTableModel):
         #: having fired and found nothing. The held-back tooltip needs the
         #: difference; nothing else does.
         self._read: set[int] = set()
-        #: Every rewrite the open recording holds, base address to the times
-        #: of it, and the recording's first sample to read them against. Empty
+        #: Every rewrite the open recording holds, keyed on
+        #: :func:`analytics.region_identity`, and the recording's first sample
+        #: to read the times against. Empty
         #: in live mode, which knows only the refresh it is on and the one
         #: before it. This never reaches a score: it is what the recording
         #: knows, shown beside the band rather than folded into it.
-        self._rewrites: dict[int, list[int]] = {}
+        self._rewrites: dict[tuple[int, int, int, int], list[int]] = {}
         self._origin: int = 0
 
     def rowCount(self, parent=QModelIndex()) -> int:
@@ -228,8 +229,10 @@ class RegionTableModel(QAbstractTableModel):
                             "here, so nothing but the map and the thread "
                             "list had anything to say")
             parts.append(tip)
-        history = describe_rewrites(self._rewrites.get(region.base_addr, ()),
-                                    self._origin)
+        # By identity, not by address. A row shows one allocation, and an
+        # address it inherited from an earlier one carries none of its past.
+        history = describe_rewrites(
+            self._rewrites.get(region_identity(region), ()), self._origin)
         if history:
             parts.append(history)
         return "; ".join(parts) or None
@@ -240,7 +243,7 @@ class RegionTableModel(QAbstractTableModel):
                     thread_starts: set[int] | None = None,
                     unpacked: set[int] | None = None,
                     allowed: Collection[str] = (),
-                    rewrites: dict[int, list[int]] | None = None,
+                    rewrites: dict[tuple[int, int, int, int], list[int]] | None = None,
                     origin_us: int = 0) -> None:
         """Replace the rows and score each one.
 
@@ -503,7 +506,7 @@ class RegionView(QWidget):
                               thread_starts: set[int] | None = None,
                               unpacked: set[int] | None = None,
                               image_name: str = "",
-                              rewrites: dict[int, list[int]] | None = None,
+                              rewrites: dict[tuple[int, int, int, int], list[int]] | None = None,
                               origin_us: int = 0) -> None:
         """Show a map from storage. ``image_name`` is the recorded process,
         looked up in the allowlist exactly as live mode looks up the process

@@ -571,12 +571,15 @@ flowchart TD
     F --> RW["PlaybackEngine.rewritten(ts)"]
     RW --> UN["PlaybackEngine.unpacked(ts, rewritten)"]
     F --> UN
-    G --> I["RegionTableModel.set_regions(regions, heads,<br/>rewritten, thread_starts, unpacked, allowed)"]
+    G --> I["RegionTableModel.set_regions(regions, heads,<br/>rewritten, thread_starts, unpacked, allowed,<br/>rewrites, origin_us)"]
     H --> I
     RW --> I
     UN --> I
+    F --> RH["PlaybackEngine.rewrites<br/>(walked once on open)"]
+    RH --> I
+    RH --> TL["Timeline: a tick per sample<br/>a region was rewritten"]
     I -->|"score_region per row"| J["RegionVerdict[]"]
-    J --> K["Region view: Score column<br/>+ heat background + reason tooltip"]
+    J --> K["Region view: Score column<br/>+ heat background + reason tooltip<br/>+ this region's rewrites over the whole run"]
 ```
 
 **Collection**, `collectors/region.py`. The sampler opens the target with
@@ -657,8 +660,10 @@ the largest process measured on this machine.
   reads per step instead of one. The hashes query touches no blob content.
 - Opening a recording walks it once for the rewrite history, on the GUI
   thread, which is 58 ms for a two minute recording and 573 ms for a ten
-  minute one (measured above). A seek costs nothing more afterwards: the
-  tooltip and the timeline marks both read the dictionary that pass built.
+  minute one (measured in ["Shipped: rewrite
+  history"](#shipped-rewrite-history) below). A seek costs nothing more
+  afterwards: the tooltip and the timeline marks both read the dictionary
+  that pass built.
 - Scoring is O(head length) per region and runs on the GUI thread only at
   `set_regions` time (per seek or per live refresh), which is negligible. The
   live change detector compares head bytes directly rather than hashing them,
@@ -786,6 +791,28 @@ per sample, and `PlaybackEngine.rewrite_history` hands each consecutive pair
 to `rewritten_regions`, the same function one seek uses, filing each change
 under the later of the two samples. `open()` runs it once and keeps the
 result on `PlaybackEngine.rewrites`.
+
+**Two things the whole-run view has to be careful about that one seek does
+not.** A count and a tick are shown at every sample of the recording, so a
+wrong one is on screen the entire time and at samples where the header's
+warnings have nothing to say yet.
+
+- **It is keyed on `analytics.region_identity`, not on the base address.**
+  Base, size, protection and state together, which is exactly what
+  `rewritten_regions` requires of a pair before it will call a change a
+  rewrite. An address is not a region: Windows reuses virtual addresses, so
+  one allocation can be freed and another put at the same base later in the
+  same recording, and a history kept by address would show the first one's
+  rewrites on the second one's row. The price is that a region whose
+  protection changes starts a fresh history, since it is a fresh identity;
+  that is the safe direction, and a protection change is its own signal.
+- **It restarts at a pid reuse.** `Dao.instance_changes` reports the samples
+  where `created_ft` changed, and the walk drops what it was holding at each
+  of them, because the sample before belongs to a different process that
+  happened to hold the same number. `PlaybackEngine.rewritten` declines the
+  same comparison, so the flag and the history still agree everywhere. The
+  live view refuses this by ending the watch when a refresh finds another
+  instance; a recording cannot end, so it declines the one comparison.
 
 **Why the pass is in Python rather than a `LAG` window.** The SQL was
 prototyped first and its cost measured, and the numbers were fine. What

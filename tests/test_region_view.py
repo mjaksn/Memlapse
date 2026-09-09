@@ -1082,6 +1082,9 @@ def test_a_process_with_no_entry_scores_as_it_always_did(qtbot, monkeypatch):
 
 
 # --- what the recording knows, beside the band -----------------------------
+from memlapse.analytics import region_identity  # noqa: E402
+
+
 def _quiet_region(base=0x50000):
     """Committed, writable, not executable: nothing fires, the row scores 0."""
     from memlapse.model.region import (
@@ -1099,7 +1102,7 @@ def test_a_row_that_scores_nothing_still_reports_a_rewrite(rmodel):
     the recording gets to answer.
     """
     from PySide6.QtCore import Qt
-    rmodel.set_regions([_quiet_region()], rewrites={0x50000: [251_000_000]},
+    rmodel.set_regions([_quiet_region()], rewrites={region_identity(_quiet_region()): [251_000_000]},
                        origin_us=0)
     assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == ""   # scores nothing
     assert rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole) == (
@@ -1110,7 +1113,7 @@ def test_the_history_follows_the_band_on_a_row_that_has_one(rmodel):
     """Both, in that order: this sample first, then the whole run."""
     from PySide6.QtCore import Qt
     rmodel.set_regions([_exec_private()],
-                       rewrites={0x40000: [60_000_000, 251_000_000]},
+                       rewrites={region_identity(_exec_private()): [60_000_000, 251_000_000]},
                        origin_us=0)
     tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
     assert tip.startswith("review: ")
@@ -1127,7 +1130,8 @@ def test_a_held_back_row_can_no_longer_imply_calm(rmodel):
     """
     from PySide6.QtCore import Qt
     rmodel.set_regions([_exec_private_rwx()], heads={0x40000: b"aaa"},
-                       rewrites={0x40000: [251_000_000]}, origin_us=0)
+                       rewrites={region_identity(_exec_private_rwx()): [251_000_000]},
+                       origin_us=0)
     tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
     assert "held at review" in tip
     assert "rewritten once in this recording, at 00:04:11" in tip
@@ -1144,8 +1148,32 @@ def test_the_history_never_moves_the_score(rmodel):
     rmodel.set_regions([_exec_private()])
     alone = rmodel.data(rmodel.index(0, 5), Qt.DisplayRole)
     rmodel.set_regions([_exec_private()],
-                       rewrites={0x40000: [1, 2, 3, 4]}, origin_us=0)
+                       rewrites={region_identity(_exec_private()): [1, 2, 3, 4]},
+                       origin_us=0)
     assert rmodel.data(rmodel.index(0, 5), Qt.DisplayRole) == alone
+
+
+def test_a_row_does_not_inherit_the_history_of_the_address_it_reuses(rmodel):
+    """The row shows one allocation, and looks its own history up by identity.
+
+    Windows reuses virtual addresses. A region freed and another allocated at
+    the same base later in the recording would, looked up by address alone,
+    wear the first one's rewrites, and the analyst would scrub to a sample
+    where this region did not exist.
+    """
+    from PySide6.QtCore import Qt
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region)
+    earlier = Region(0x60000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    later = Region(0x60000, 64 * 1024, MEM_COMMIT, PAGE_EXECUTE_READ,
+                   MEM_PRIVATE)          # same base, a different allocation
+    history = {region_identity(earlier): [251_000_000]}
+    rmodel.set_regions([later], rewrites=history, origin_us=0)
+    tip = rmodel.data(rmodel.index(0, 0), Qt.ToolTipRole)
+    assert tip is not None and "rewritten" not in tip   # it scores, it has no past
+    rmodel.set_regions([earlier], rewrites=history, origin_us=0)
+    assert "rewritten once in this recording" in rmodel.data(
+        rmodel.index(0, 0), Qt.ToolTipRole)
 
 
 def test_live_mode_says_nothing_about_a_run_it_has_not_got(rmodel):
@@ -1159,7 +1187,7 @@ def test_show_recorded_regions_passes_the_history_through(view):
     """The view's own end of the chain, which a model test cannot see."""
     from PySide6.QtCore import Qt
     view.show_recorded_regions([_quiet_region()], "Recording #1",
-                               rewrites={0x50000: [251_000_000]},
+                               rewrites={region_identity(_quiet_region()): [251_000_000]},
                                origin_us=0)
     assert view.model.data(view.model.index(0, 0), Qt.ToolTipRole) == (
         "rewritten once in this recording, at 00:04:11")
