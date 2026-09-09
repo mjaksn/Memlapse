@@ -417,3 +417,68 @@ def test_playback_seek_scores_an_unpacking_region(main_window):
     win._on_seek(2_000)
     model = win.region_view.model
     assert model.data(model.index(0, 5), Qt.DisplayRole) == "85"  # 50 + 15 + 20
+
+
+# --- a replay says what the sample could and could not see ------------------
+def _seed_state(db, *, can_read=None, created=None, ts=1_000):
+    from memlapse.storage.dao import ProcState
+    conn = connect(db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    dao.add_sample(rid, ts, ProcState(ts, 1000, 100, 50, 3,
+                                      can_read=can_read, created_ft=created), [])
+    dao.end_recording(rid, ts + 1)
+    conn.close()
+    return rid
+
+
+def test_playback_header_reports_a_target_that_denied_reads(main_window):
+    """Live says this; a replay of the same watch has to say it too.
+
+    Without it an empty head set reads as a clean look at the memory, when in
+    truth nothing was ever read and every region is scored on structure alone.
+    """
+    win, db = main_window
+    rid = _seed_state(db, can_read=False)
+    win._open_recording(rid)
+    win._on_seek(1_000)
+    assert "(no read access, map only)" in win.region_view.header.text()
+
+
+def test_playback_header_is_silent_when_reads_worked(main_window):
+    win, db = main_window
+    rid = _seed_state(db, can_read=True)
+    win._open_recording(rid)
+    win._on_seek(1_000)
+    assert "no read access" not in win.region_view.header.text()
+
+
+def test_playback_header_does_not_invent_a_denial_for_an_old_recording(main_window):
+    """None means the column did not exist, which is not a denial.
+
+    Saying "no read access" here would tell an analyst a recording was taken
+    blind when nobody ever asked the question.
+    """
+    win, db = main_window
+    rid = _seed_state(db)                     # neither column written
+    win._open_recording(rid)
+    win._on_seek(1_000)
+    assert "no read access" not in win.region_view.header.text()
+
+
+def test_playback_header_flags_a_pid_reused_mid_recording(main_window):
+    """The sampler opens a fresh handle each sample, so this really can happen."""
+    from memlapse.storage.dao import ProcState
+    win, db = main_window
+    conn = connect(db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    for ts, created in ((1_000, 111), (2_000, 222)):
+        dao.add_sample(rid, ts, ProcState(ts, 1000, 100, 50, 3, created_ft=created), [])
+    dao.end_recording(rid, 3_000)
+    conn.close()
+    win._open_recording(rid)
+    win._on_seek(1_000)
+    assert "pid reused" not in win.region_view.header.text()   # before the change
+    win._on_seek(2_000)
+    assert "pid reused during this recording" in win.region_view.header.text()
