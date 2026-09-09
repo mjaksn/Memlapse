@@ -25,8 +25,9 @@ The sources are abbreviated in citations as [T], [C], [K20], [K22], [D24] and
 ## 1. Signals available in a single snapshot
 
 These extend the per-region injection score described in ARCHITECTURE.md,
-which today combines region type, protection, an `MZ` header, a NOP sled and
-Shannon entropy.
+which today combines region type, protection, an `MZ` header, a NOP sled,
+Shannon entropy, thread start addresses, code rewritten in place and a fall
+in entropy between two looks.
 
 ### 1.1 An `MZ` header is far stronger when the region is not a loaded module. Refines
 
@@ -344,12 +345,12 @@ YARA, a disassembler or Volatility without a second tool. Both are one
 **Status.** Half shipped. Right-clicking a region in live mode offers "Save
 region bytes", which writes up to `REGION_DUMP_MAX` (16 MB) of it and says
 in the header when the cap truncated the save. Playback refuses, because a
-recording holds 256 bytes a region and a file made from that would look like
-a dump without being one, and so does a pid that has come to mean a different
-process since the map was read: bytes from whatever inherited the number
-would be evidence of nothing. The process minidump is not written: it needs
-`MiniDumpWriteDump` from dbghelp, which is a new dependency and a much
-larger artefact than anything the tool produces today.
+recording holds the first 256 bytes of each executable region and a file made
+from that would look like a dump without being one, and so does a pid that has
+come to mean a different process since the map was read: bytes from whatever
+inherited the number would be evidence of nothing. The process minidump is
+not written: it needs `MiniDumpWriteDump` from dbghelp, which is a new
+dependency and a much larger artefact than anything the tool produces today.
 
 ### 4.2 Snapshot on alert. New
 
@@ -547,7 +548,7 @@ samples, would let a single RWX region (severe, uncertain) rank differently
 from a repeated `MZ`-in-private-memory hit (severe, confident). This pairs
 naturally with the temporal rules in section 2.
 
-**Score 0 and minus one are reserved, and neither means benign. New.**
+**Score 0 and minus one are reserved, and neither means benign. Corroborates.**
 Suppressed detections keep score 0; allowlisted files keep their row with
 "Uninspected files have a score of -1" [V, p. 454]. Suppressing a verdict
 leaves the underlying score alone: "The threat score of the file does not
@@ -697,8 +698,8 @@ overwhelmed, from bypassed, meaning deliberately skipped [V, p. 214, p. 537].
 Memlapse's latest-only delivery discards intermediate samples by design;
 counting and showing skipped samples per collector makes that honest.
 **Shipped:** the `skipped` counter in `collectors/base.py` now reaches the
-status bar, which reads "N processes, M polls dropped" whenever M is above
-zero.
+status bar, which reads "N processes, M process polls dropped" whenever a
+stream has dropped any, naming each stream separately.
 
 **State your limits and warn at 90 percent. New.** The product publishes
 numeric ceilings (events per window, rows displayed, file size analysed) and

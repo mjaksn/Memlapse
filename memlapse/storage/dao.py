@@ -5,8 +5,9 @@ across threads, each thread (the sampler that writes, the UI that reads back
 for playback) constructs its own Dao. WAL mode lets them run concurrently.
 
 A "sample" is all rows sharing one ``ts_us`` within a recording: exactly one
-process_snapshot and N region_snapshots. Playback finds the latest sample at
-or before a target time and rebuilds state from it.
+process_snapshot, N region_snapshots, and one thread_snapshot for every thread
+whose start address could be read. Playback finds the latest sample at or
+before a target time and rebuilds state from it.
 
 Captured region heads are stored once per distinct content in ``head``, keyed
 by SHA-256, and each region_snapshot row points at its head by hash. Most

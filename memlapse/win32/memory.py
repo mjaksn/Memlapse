@@ -92,7 +92,8 @@ class ProcessMemory:
         if not handle:
             err = ctypes.get_last_error()
             raise ProcessAccessError(
-                f"OpenProcess({pid}) failed (WinError {err}); try running elevated"
+                f"OpenProcess({pid}) failed (WinError {err}); the process may "
+                "have exited, or opening it may need elevation"
             )
         self._handle = handle
 
