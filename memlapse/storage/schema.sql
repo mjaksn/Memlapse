@@ -7,7 +7,27 @@ CREATE TABLE IF NOT EXISTS recording (
     target_name TEXT    NOT NULL,
     started_utc INTEGER NOT NULL,
     ended_utc   INTEGER,
-    note        TEXT
+    note        TEXT,
+    -- 1 when the allowlist in force was written to recording_allowlist, NULL
+    -- when this recording predates the column. Zero rows in that table cannot
+    -- say which of the two happened, and they do not mean the same thing: a
+    -- recording that excused nothing is scored with no exemptions, while one
+    -- that never recorded its list is scored with whatever is in force now,
+    -- exactly as replays behaved before the table existed.
+    allowlist_recorded INTEGER
+);
+
+-- The allowlist in force when the recording was made, so a replay on another
+-- machine excuses what the session that recorded it excused rather than what
+-- its own analyst happens to have configured. One row per entry, holding the
+-- same three fields as AllowlistEntry; the note travels because an exemption
+-- nobody can justify later is one nobody dares delete.
+CREATE TABLE IF NOT EXISTS recording_allowlist (
+    id           INTEGER PRIMARY KEY,
+    recording_id INTEGER NOT NULL REFERENCES recording(id) ON DELETE CASCADE,
+    image_name   TEXT    NOT NULL,
+    rule         TEXT    NOT NULL,
+    note         TEXT    NOT NULL DEFAULT ''
 );
 
 -- can_read and created_ft describe the sample itself rather than the process:

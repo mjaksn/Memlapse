@@ -9,7 +9,7 @@ that time, and can compare that sample with the one before it.
 from __future__ import annotations
 
 from ..analytics import (
-    regions_with_thread_starts, rewritten_regions, unpacked_regions,
+    Allowlist, regions_with_thread_starts, rewritten_regions, unpacked_regions,
 )
 from ..storage import connect
 from ..storage.dao import Dao, ProcState, RecordingRow
@@ -31,6 +31,13 @@ class PlaybackEngine:
         #: pid. Empty for every well-behaved recording, and empty for one made
         #: before the creation time was stored, which is not the same thing.
         self.instance_changes: list[int] = []
+        #: The allowlist the recording was made under, or None when the
+        #: recording never wrote one down. None is not an empty allowlist:
+        #: it sends the caller back to whatever is in force now, which is how
+        #: every replay behaved before this was stored. Test the difference
+        #: with ``is None``, never for truth, since a recorded allowlist that
+        #: excused nothing is falsy and still governs the replay.
+        self.allowlist: Allowlist | None = None
 
     def list_recordings(self) -> list[RecordingRow]:
         return self._dao.list_recordings()
@@ -43,6 +50,7 @@ class PlaybackEngine:
             (r.target_name for r in self._dao.list_recordings()
              if r.id == recording_id), "")
         self.instance_changes = self._dao.instance_changes(recording_id)
+        self.allowlist = self._dao.allowlist_for(recording_id)
         return self.sample_times
 
     def seek(self, ts_us: int) -> tuple[ProcState | None, list[Region]]:

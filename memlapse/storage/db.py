@@ -4,8 +4,8 @@ WAL mode lets a collector write recordings while the UI reads for playback.
 The schema is applied idempotently on connect, so opening a fresh file just
 works: a table added since a database was created (thread_snapshot, most
 recently) appears on the next open. Only a change to an existing table needs
-more, and there have been three: head_hash on region_snapshot, then can_read
-and created_ft on process_snapshot. Used by the recording sampler to write and
+more, and there have been four: head_hash on region_snapshot, then can_read
+and created_ft on process_snapshot, then allowlist_recorded on recording. Used by the recording sampler to write and
 by the playback engine to read; the live monitor does not touch it.
 """
 
@@ -41,6 +41,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # older recording, which reads as "not recorded" rather than as 0.
     _add_column(conn, "process_snapshot", "can_read", "INTEGER")
     _add_column(conn, "process_snapshot", "created_ft", "INTEGER")
+    # Whether this recording wrote down the allowlist it was made under. NULL
+    # on an older recording, which is not the same as having excused nothing.
+    _add_column(conn, "recording", "allowlist_recorded", "INTEGER")
 
 
 def _add_column(conn: sqlite3.Connection, table: str, column: str,

@@ -266,3 +266,68 @@ def test_instance_changes_ignores_samples_with_no_identity(dao):
     for ts in (1_000, 2_000):
         dao.add_sample(rid, ts, ProcState(ts, 1000, 1, 1, 1), [])
     assert dao.instance_changes(rid) == []
+
+
+# --- the allowlist the recording was made under ----------------------------
+# Three states, not two. None means nobody wrote a list down and the caller
+# falls back to what is in force now; an Allowlist with no entries means this
+# recording excused nothing and the replay must excuse nothing either. Zero
+# rows in recording_allowlist cannot tell those apart, which is what
+# recording.allowlist_recorded is for.
+
+
+def _entries():
+    from memlapse.analytics import AllowlistEntry, RULE_PRIVATE_EXEC, RULE_RWX
+    return [AllowlistEntry("jit.exe", RULE_PRIVATE_EXEC, "JIT host"),
+            AllowlistEntry("jit.exe", RULE_RWX, "same host, second rule"),
+            AllowlistEntry("other.exe", RULE_RWX, "")]
+
+
+def test_allowlist_round_trips_with_its_notes(dao):
+    from memlapse.analytics import Allowlist, RULE_PRIVATE_EXEC, RULE_RWX
+    rid = dao.create_recording(1, "jit.exe", 1_000, allowlist=Allowlist(_entries()))
+    back = dao.allowlist_for(rid)
+    assert back is not None
+    assert back.rules_for("jit.exe") == {RULE_PRIVATE_EXEC, RULE_RWX}
+    assert back.rules_for("other.exe") == {RULE_RWX}
+    # The note travels: an exemption nobody can justify later is one nobody
+    # dares delete, so it is stored rather than thrown away with the lookup.
+    assert [e.note for e in back.entries] == [
+        "JIT host", "same host, second rule", ""]
+
+
+def test_a_recorded_empty_allowlist_is_not_none(dao):
+    """The distinction the whole flag exists for.
+
+    Both this recording and one made before the column carry zero rows in
+    recording_allowlist. Only the flag says which happened, and they score
+    differently: this one excuses nothing, that one defers to the allowlist
+    in force at replay time.
+    """
+    from memlapse.analytics import Allowlist
+    rid = dao.create_recording(1, "p", 1_000, allowlist=Allowlist())
+    back = dao.allowlist_for(rid)
+    assert back is not None
+    assert back.entries == ()
+    assert not back  # falsy, and still an answer: test with "is None"
+
+
+def test_no_allowlist_given_records_none(dao):
+    rid = dao.create_recording(1, "p", 1_000)
+    assert dao.allowlist_for(rid) is None
+    flag = dao.conn.execute(
+        "SELECT allowlist_recorded FROM recording WHERE id=?", (rid,)).fetchone()
+    assert flag[0] is None
+
+
+def test_allowlist_for_an_unknown_recording_is_none(dao):
+    assert dao.allowlist_for(4242) is None
+
+
+def test_entries_are_scoped_to_their_recording(dao):
+    from memlapse.analytics import Allowlist, RULE_RWX
+    mine = dao.create_recording(1, "jit.exe", 1_000,
+                                allowlist=Allowlist(_entries()))
+    theirs = dao.create_recording(2, "jit.exe", 2_000, allowlist=Allowlist())
+    assert dao.allowlist_for(theirs).entries == ()
+    assert dao.allowlist_for(mine).rules_for("other.exe") == {RULE_RWX}

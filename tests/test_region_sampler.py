@@ -228,3 +228,39 @@ def test_a_sample_survives_a_process_that_will_not_say_when_it_started(
             "SELECT COUNT(*) FROM region_snapshot").fetchone()[0] > 0
     finally:
         conn.close()
+
+
+def test_the_sample_records_the_allowlist_it_was_started_with(qapp, tmp_db):
+    """Written once, at the start, from what was in force when Record was hit.
+
+    The sampler is the only writer holding a connection on the right thread,
+    which is why the entries travel down to it rather than being written from
+    the window.
+    """
+    from memlapse.analytics import Allowlist, AllowlistEntry, RULE_RWX
+    book = Allowlist([AllowlistEntry("me.exe", RULE_RWX, "test host")])
+    s = RegionSampler(os.getpid(), "me", 0.01, db_path=tmp_db, allowlist=book)
+    s.sampled.connect(lambda ts, c: s.stop())
+    s.run()
+
+    conn = connect(tmp_db)
+    try:
+        back = Dao(conn).allowlist_for(s.recording_id)
+        assert back is not None
+        assert back.rules_for("me.exe") == {RULE_RWX}
+        assert [e.note for e in back.entries] == ["test host"]
+    finally:
+        conn.close()
+
+
+def test_without_an_allowlist_the_recording_records_none(qapp, tmp_db):
+    """Not an empty one: a replay must fall back, not claim nothing was excused."""
+    s = RegionSampler(os.getpid(), "me", 0.01, db_path=tmp_db)
+    s.sampled.connect(lambda ts, c: s.stop())
+    s.run()
+
+    conn = connect(tmp_db)
+    try:
+        assert Dao(conn).allowlist_for(s.recording_id) is None
+    finally:
+        conn.close()
