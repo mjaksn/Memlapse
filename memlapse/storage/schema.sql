@@ -10,6 +10,13 @@ CREATE TABLE IF NOT EXISTS recording (
     note        TEXT
 );
 
+-- can_read and created_ft describe the sample itself rather than the process:
+-- whether the handle that took it could read memory, and which instance of the
+-- pid answered. Both are nullable, and NULL means "this recording predates the
+-- column", which is not the same as 0. A replay cannot reconstruct either one
+-- after the fact, which is why they are recorded rather than inferred: an
+-- empty head set means "reads were refused" or "there was nothing executable
+-- to read", and only can_read separates them.
 CREATE TABLE IF NOT EXISTS process_snapshot (
     id            INTEGER PRIMARY KEY,
     recording_id  INTEGER NOT NULL REFERENCES recording(id) ON DELETE CASCADE,
@@ -17,7 +24,9 @@ CREATE TABLE IF NOT EXISTS process_snapshot (
     pid           INTEGER NOT NULL,
     wset_bytes    INTEGER NOT NULL,
     priv_bytes    INTEGER NOT NULL,
-    thread_count  INTEGER NOT NULL
+    thread_count  INTEGER NOT NULL,
+    can_read      INTEGER,   -- 1, 0, or NULL for "not recorded"
+    created_ft    INTEGER    -- process creation FILETIME; identifies the instance
 );
 
 CREATE TABLE IF NOT EXISTS thread (

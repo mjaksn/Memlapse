@@ -91,11 +91,20 @@ def test_connect_migrates_old_database(tmp_db):
         # A table added since the database was made appears on open, with
         # no migration step of its own.
         assert "thread_snapshot" in tables
+        # The sample columns arrive on the same open, on a different table.
+        proc_columns = {r[1] for r in conn.execute(
+            "PRAGMA table_info(process_snapshot)")}
+        assert {"can_read", "created_ft"} <= proc_columns
         # The old recording still reads back through the legacy table, and
         # carries no hash for the detector to mistake for a change.
         dao = Dao(conn)
         assert dao.heads_at(1, 1000) == {65536: b"MZ"}
         assert dao.head_hashes_at(1, 1000) == {}
+        # Its samples answer "not recorded" for both, which must never be
+        # read as a denial: nothing was refused, nothing was asked.
+        state = dao.state_at(1, 1000)
+        assert state.can_read is None and state.created_ft is None
+        assert dao.instance_changes(1) == []
     finally:
         conn.close()
 
@@ -103,10 +112,12 @@ def test_connect_migrates_old_database(tmp_db):
 def test_connect_twice_after_migration_is_quiet(tmp_db):
     _old_shape_db(tmp_db)
     connect(tmp_db).close()
-    conn = connect(tmp_db)  # column already present: nothing to do
+    conn = connect(tmp_db)  # columns already present: nothing to do
     try:
         columns = [r[1] for r in conn.execute("PRAGMA table_info(region_snapshot)")]
         assert columns.count("head_hash") == 1
+        proc = [r[1] for r in conn.execute("PRAGMA table_info(process_snapshot)")]
+        assert proc.count("can_read") == 1 and proc.count("created_ft") == 1
     finally:
         conn.close()
 
