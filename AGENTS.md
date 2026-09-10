@@ -61,7 +61,7 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 404 passed with 100 percent line and branch
+(2026-09-06); the test run is 460 passed with 100 percent line and branch
 coverage (2026-09-09).
 
 ## Conventions
@@ -141,12 +141,38 @@ coverage (2026-09-09).
   tick, so nothing stops the pid being reused between two samples and a
   stranger's map being appended to the same recording. That is why every
   sample stores `created_ft`; `Dao.instance_changes` reports where it changed.
+- A `QRunnable` auto-deletes by default, so a `QThreadPool` destroys it the
+  moment `run()` returns and any Python reference kept to it is left pointing
+  at freed C++. Keeping one, as `PlaybackEngine` does so it can cancel the
+  walk, means `setAutoDelete(False)` and dropping the reference when the
+  worker reports. A pool substituted in tests deletes nothing, so the suite
+  cannot see this: it showed up as `Internal C++ object already deleted` on
+  the second recording opened, in the real app only.
+- Coverage does not trace the threads a Qt pool or a `QThread` creates, so a
+  `run()` reached only through `start()` reads as uncovered however often it
+  executes. Test a runnable by calling `run()` on the test thread, as
+  `test_region_sampler.py` does for the sampler, and substitute a pool that
+  runs inline where a signal has to arrive: `tests/conftest.py` does that for
+  the rewrite-history walk with an autouse fixture. One test still calls the
+  real pool factory, or the thing claimed about the app would be the one
+  thing untested.
 - A band is a claim about one sample, so live mode and playback should reach
   the same band for the same moment, and everything else a recording knows
   belongs beside the band rather than inside it. The one live departure, the
   sticky rewrite flag, is a stand-in for having no timeline to scrub. Read
   `docs/ARCHITECTURE.md`, "A band is about a moment", before changing anything
   that makes the two modes score differently.
+- Beside the band is where `PlaybackEngine.rewrites` goes: the whole
+  recording's rewrites per region, walked once on `open()`, shown as a line
+  in the row's tooltip and as ticks on the timeline. It reaches no score, and
+  a row that scores nothing still shows it, which is the case the feature
+  exists for. Anything else a recording alone can answer belongs in the same
+  place and not in `score_region`.
+- A whole-run answer is keyed on `analytics.region_identity`, never on a base
+  address, and restarts at every `Dao.instance_changes` timestamp. An address
+  outlives the allocation that held it and a pid outlives the process, so
+  either mistake hands one thing's history to another, and unlike a per-sample
+  flag it is then on screen at every sample of the recording.
 - `Allowlist.__bool__` says whether it holds entries, which is not whether
   it was recorded. A recording that excused nothing gives an allowlist that
   is falsy and still governs its replay, so every choice between a recorded

@@ -21,7 +21,9 @@ the readers fall back to it.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from dataclasses import dataclass
+from itertools import groupby
 
 from ..analytics import Allowlist, AllowlistEntry, head_hash
 from ..model.region import Region
@@ -233,6 +235,83 @@ class Dao:
                 changed.append(ts)
             previous = created
         return changed
+
+    def region_samples(
+        self, recording_id: int, *, state: int, protect_any: int,
+        protect_none: int,
+    ) -> Iterator[tuple[int, list[Region], dict[int, bytes], bool]]:
+        """Every sample of a recording in order, carrying the comparable rows.
+
+        Yields ``(ts_us, regions, digests, observed)`` per sample, which is
+        what a pass over a whole recording wants: the anchored reads below
+        answer for one moment each, so walking a recording through them costs
+        two queries and two MAX subqueries per sample, where this costs two
+        queries for the lot.
+
+        A row is only worth carrying if a content comparison could involve it,
+        and that is three conditions: it is in ``state``, its protection has
+        some bit of ``protect_any`` and no bit of ``protect_none``, and it
+        carries a head hash. All three are pushed into the query, because on a
+        ten minute recording they leave about a seventh of the table and the
+        difference is seconds rather than milliseconds. The caller passes the
+        values rather than storage knowing them: what makes a row comparable
+        is the detector's business (see
+        :meth:`PlaybackEngine.rewrite_history`), and storage is only being
+        asked to fetch less.
+
+        Every sample the recording has is yielded even so, empty when nothing
+        in it survived and empty when the map itself was, and that is the part
+        to be careful with. Skipping an empty sample would leave the samples
+        either side of it looking consecutive, so a region that dropped out of
+        the map for one tick and came back holding different bytes would read
+        as rewritten in place, which is a different event with a different
+        meaning. The ticks therefore come from ``process_snapshot``, the one
+        table with a row per sample whatever the map held.
+
+        Yields ``(ts_us, regions, digests, observed)``. ``observed`` is False
+        only when the sample held no region rows at all; a sample whose rows
+        were all filtered out here is observed with nothing comparable in it.
+
+        A generator on purpose: the caller holds two samples at a time, never
+        the recording.
+        """
+        # From process_snapshot, which holds exactly one row per sample even
+        # when the map came back empty. Taken from region_snapshot instead, a
+        # sample with no regions at all would not appear, and the samples on
+        # either side of it would be handed to the caller as consecutive,
+        # which is the very thing the paragraph above promises not to do.
+        # The EXISTS says whether the sample held a map at all, which is not
+        # the same question as whether anything in it was comparable. A caller
+        # tracking what a region was doing needs both: no rows means nothing
+        # was seen that tick, while rows that all failed the filter mean the
+        # map was seen and the region was not in the part of it that counts.
+        # One indexed probe per sample, on ix_regionsnap_rec_ts.
+        ticks = self.conn.execute(
+            "SELECT p.ts_us, EXISTS(SELECT 1 FROM region_snapshot r "
+            "WHERE r.recording_id=p.recording_id AND r.ts_us=p.ts_us) "
+            "FROM process_snapshot p WHERE p.recording_id=? ORDER BY p.ts_us",
+            (recording_id,),
+        )
+        rows = self.conn.execute(
+            "SELECT ts_us, base_addr, size, state, protect, type, head_hash "
+            "FROM region_snapshot WHERE recording_id=? AND state=? "
+            "AND (protect & ?) != 0 AND (protect & ?) = 0 "
+            "AND head_hash IS NOT NULL ORDER BY ts_us, base_addr",
+            (recording_id, state, protect_any, protect_none),
+        )
+        samples = groupby(rows, key=lambda row: row[0])
+        pending = next(samples, None)
+        for ts_us, observed in ticks:
+            regions: list[Region] = []
+            digests: dict[int, bytes] = {}
+            if pending is not None and pending[0] == ts_us:
+                for _, base, size, row_state, protect, type_, digest in pending[1]:
+                    regions.append(Region(base_addr=base, size=size,
+                                          state=row_state, protect=protect,
+                                          type=type_))
+                    digests[base] = bytes(digest)
+                pending = next(samples, None)
+            yield ts_us, regions, digests, bool(observed)
 
     def sample_at(self, recording_id: int, ts_us: int) -> int | None:
         """Timestamp of the region sample at or before ts_us, or None.

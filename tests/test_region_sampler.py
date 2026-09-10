@@ -229,7 +229,6 @@ def test_a_sample_survives_a_process_that_will_not_say_when_it_started(
     finally:
         conn.close()
 
-
 def test_the_sample_records_the_allowlist_it_was_started_with(qapp, tmp_db):
     """Written once, at the start, from what was in force when Record was hit.
 
