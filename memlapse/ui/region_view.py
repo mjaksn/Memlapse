@@ -141,10 +141,10 @@ class RegionTableModel(QAbstractTableModel):
         self._read: set[int] = set()
         #: Every rewrite the open recording holds, keyed on
         #: :func:`analytics.region_identity`, and the recording's first sample
-        #: to read the times against. Empty
-        #: in live mode, which knows only the refresh it is on and the one
-        #: before it. This never reaches a score: it is what the recording
-        #: knows, shown beside the band rather than folded into it.
+        #: to read the times against. Empty in live mode, which knows only the
+        #: refresh it is on and the one before it. This never reaches a score:
+        #: it is what the recording knows, shown beside the band rather than
+        #: folded into it.
         self._rewrites: dict[tuple[int, int, int, int], list[int]] = {}
         self._origin: int = 0
 

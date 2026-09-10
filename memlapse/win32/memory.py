@@ -1,9 +1,13 @@
 """ctypes wrappers for reading another process's virtual memory.
 
 ``ProcessMemory`` opens a handle once and exposes region enumeration
-(VirtualQueryEx) and reads (ReadProcessMemory). It is a context manager so the
-handle is always released. Assumes a 64-bit host (the MEMORY_BASIC_INFORMATION
-layout below is the x64 one).
+(VirtualQueryEx), reads (ReadProcessMemory), the target's creation time
+(GetProcessTimes) and whether it has exited (GetExitCodeProcess). Those last
+two are the pid guard: the creation time catches a number that has been
+reused, and the exit check catches a target that died while the open handle
+kept its number. It is a context manager so the handle is always released.
+Assumes a 64-bit host (the MEMORY_BASIC_INFORMATION layout below is the x64
+one).
 """
 
 from __future__ import annotations
@@ -74,7 +78,10 @@ _STILL_ACTIVE = 259
 
 
 class ProcessAccessError(OSError):
-    """Raised when a process cannot be opened (usually needs elevation)."""
+    """Raised when a process cannot be opened, when a query on an open
+    handle is refused, or when the target has exited and its address space
+    is gone. Opening usually needs elevation; the other two do not.
+    """
 
 
 class ProcessMemory:
@@ -86,7 +93,8 @@ class ProcessMemory:
         access = PROCESS_QUERY_INFORMATION | (PROCESS_VM_READ if want_read else 0)
         handle = _kernel32.OpenProcess(access, False, pid)
         if not handle and want_read:
-            # Retry without VM_READ: we can still map regions, just not read them.
+            # Retry with query-limited access and no VM_READ: we can still
+            # map regions, just not read them.
             handle = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
             self.can_read = False
         if not handle:

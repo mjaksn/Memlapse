@@ -289,13 +289,12 @@ class PlaybackEngine(QObject):
 
         Also empty when the recorded process instance changed anywhere
         between the two samples being compared, because the earlier one then
-        belongs to a different process that
-        happened to hold the same pid. The live view refuses the same
-        comparison by ending the watch when a refresh finds another instance;
-        a recording cannot end, so it declines the one comparison instead.
-        Two unrelated maps differenced against each other would report a
-        stranger's memory as code overwritten in place, which is the loudest
-        thing this tool says.
+        belongs to a different process that happened to hold the same pid.
+        The live view refuses the same comparison by ending the watch when a
+        refresh finds another instance; a recording cannot end, so it
+        declines the one comparison instead. Two unrelated maps differenced
+        against each other would report a stranger's memory as code
+        overwritten in place, which is the loudest thing this tool says.
         """
         if self.recording_id is None:
             return set()
@@ -362,10 +361,10 @@ class PlaybackEngine(QObject):
         The read is told what a comparable row looks like, and the answer is
         :func:`analytics.is_executable` split into the bits a query can ask
         for: committed, some execute bit set, the guard bit clear. Fetching
-        the rest and discarding it costs a fifth of a second on a two minute
-        recording and two and a half seconds on a ten minute one, measured in
-        ARCHITECTURE.md, "Shipped: rewrite history". Narrowing the read cannot
-        change the answer, because every row it leaves behind is one
+        the rest and discarding it costs a quarter of a second on a two
+        minute recording and about 2.7 seconds on a ten minute one, measured
+        in ARCHITECTURE.md, "Shipped: rewrite history". Narrowing the read
+        cannot change the answer, because every row it leaves behind is one
         :func:`rewritten_regions` would have refused on both sides of the
         comparison.
         """

@@ -198,8 +198,8 @@ Each phase is usable on its own.
 
 - **Elevation:** most useful targets need admin + SeDebugPrivilege. The app
   enables the privilege on startup when it can and relaunches through UAC only
-  when started with `--elevate`; the status bar reports whether the process is
-  elevated.
+  when started with `--elevate`; the status bar reports on opening whether the
+  process is elevated.
 - **Antivirus/EDR:** `ReadProcessMemory` + guard pages against arbitrary
   processes looks exactly like malware. Fine on your own box; EDR may flag it.
 - **ETW volume:** memory events are a firehose. Needs per-PID filtering and
@@ -627,8 +627,9 @@ column. On `set_regions(rows, heads, rewritten, thread_starts, unpacked,
 allowed, rewrites, origin_us)` it computes a `RegionVerdict` per row and:
 
 - shows the numeric score (blank for benign rows),
-- tints suspicious rows via `theme.heat_color(score/100)` (green→amber→red,
-  translucent so text stays legible on the dark theme), and
+- tints suspicious rows via `theme.heat_color(effective_score/100)`, or a
+  neutral grey where the band is `allowlisted` (green→amber→red, translucent
+  so text stays legible on the dark theme), and
 - exposes the human-readable `reasons` as the row tooltip, followed by what
   the open recording knows about that region over the whole run (["Shipped:
   rewrite history"](#shipped-rewrite-history)). The last two arguments carry
@@ -740,12 +741,12 @@ NyxWatch author acknowledges apply here:
 ### Shipped: content-change detector
 
 The first temporal signal. `analytics.rewritten_regions(prev_regions,
-prev_hashes, curr_regions, curr_hashes)` returns the base addresses of regions
-that are committed and executable in both of two consecutive samples with the
-same base, size and protection, whose captured heads both exist and whose
-hashes differ. A head missing on either side means the comparison cannot be
-made, not that the bytes changed, and a region that appeared, grew or changed
-protection is left to the allocation and transition signals.
+prev_digests, curr_regions, curr_digests)` returns the base addresses of
+regions that are committed and executable in both of two consecutive samples
+with the same base, size and protection, whose captured heads both exist and
+whose hashes differ. A head missing on either side means the comparison cannot
+be made, not that the bytes changed, and a region that appeared, grew or
+changed protection is left to the allocation and transition signals.
 
 `PlaybackEngine.rewritten(ts_us)` runs it between the anchored sample and the
 one before it, and the region view passes the result into `score_region` as

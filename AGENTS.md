@@ -73,10 +73,11 @@ coverage (2026-09-09).
   the thread start addresses that go with it run on a `QThreadPool` thread, once a
   second while the view is on screen), polling and recording live in `collectors` on
   their own `QThread`s and write storage there, playback reads storage on the GUI
-  thread through `PlaybackEngine`, and `model`, `storage`, `services` and
-  `analytics` import no Qt widgets and no Win32 (QtCore signals are allowed in
-  `services` and `collectors`). Cross-thread hand-off is by Qt signal only; no
-  locks.
+  thread through `PlaybackEngine`, apart from the whole-run rewrite walk that
+  `open()` sends to a `QThreadPool` thread with a connection of its own, and
+  `model`, `storage`, `services` and `analytics` import no Qt widgets and no Win32
+  (QtCore signals are allowed in `services` and `collectors`). Cross-thread
+  hand-off is by Qt signal only; no locks.
 - Keep the GIL free while the GUI is busy: a collector must not spend most of its tick
   in Python-level per-process work. Prefer one bulk syscall (see `win32/processes.py`)
   and precomputed display strings in the model. The reasons are recorded in

@@ -45,10 +45,12 @@ jobs:
           # runtime rather than a constraint the hashes impose.
           python-version: "3.14"
       - name: install the pinned dependencies
-        # Pinned by version and by hash, and --require-hashes is what makes
-        # the hashes mean anything. Left off, pip installs the version and
-        # verifies nothing. The dev file carries the runtime set as well as
-        # the test tools, which is why only one install is needed.
+        # Pinned by version and by hash. pip turns hash checking on by
+        # itself as soon as any requirement carries a hash, so the flag is
+        # belt and braces: what it catches is a file with no hashes at all,
+        # a lock regenerated without them, which would otherwise install
+        # unchecked. The dev file carries the runtime set as well as the
+        # test tools, which is why only one install is needed.
         run: pip install --require-hashes --requirement requirements-dev.txt
       - name: run the suite
         # Coverage is on by default through pyproject.toml, with the gate at
