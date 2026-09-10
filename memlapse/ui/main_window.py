@@ -343,6 +343,12 @@ class MainWindow(QMainWindow):
             # denial and must not be reported as one.
             if state.can_read is False:
                 header += "  (no read access, map only)"
+            # Said from a recorded fact rather than inferred from an empty
+            # list, because the anchor is now the sample itself: scrub to one
+            # whose map was refused and there are no rows to show, which
+            # without this reads as a process holding no memory at all.
+            if not self.playback.map_recorded(ts_us):
+                header += "  (no map recorded at this sample)"
             if any(ts <= ts_us for ts in self.playback.instance_changes):
                 header += "  (pid reused during this recording)"
             self._status_label.setText(

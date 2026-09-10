@@ -354,6 +354,26 @@ class Dao:
             (recording_id, ts_us),
         ).fetchone()[0]
 
+    def map_recorded_at(self, recording_id: int, ts_us: int) -> bool:
+        """Whether the sample anchored at ts_us recorded any region rows.
+
+        The reads below answer nothing for a sample that recorded no map, and
+        nothing is what they would also answer for a process holding no
+        memory. Storage cannot tell those two apart, since both are zero
+        rows, but it can say whether the sample it answered from held any,
+        which is what keeps an empty view from being read as a clean look at
+        an empty process. A live process always has mapped memory, so in
+        practice a sample with no rows is a walk that was refused.
+        """
+        anchor = self.sample_at(recording_id, ts_us)
+        if anchor is None:
+            return False
+        return bool(self.conn.execute(
+            "SELECT EXISTS(SELECT 1 FROM region_snapshot "
+            "WHERE recording_id=? AND ts_us=?)",
+            (recording_id, anchor),
+        ).fetchone()[0])
+
     def regions_at(self, recording_id: int, ts_us: int) -> list[Region]:
         """Region map from the latest sample at or before ts_us."""
         anchor = self.sample_at(recording_id, ts_us)

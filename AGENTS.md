@@ -61,8 +61,8 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06); the test run is 460 passed with 100 percent line and branch
-coverage (2026-09-09).
+(2026-09-06); the test run is 465 passed with 100 percent line and branch
+coverage (2026-09-10).
 
 ## Conventions
 
@@ -174,6 +174,17 @@ coverage (2026-09-09).
   outlives the allocation that held it and a pid outlives the process, so
   either mistake hands one thing's history to another, and unlike a per-sample
   flag it is then on screen at every sample of the recording.
+- Every anchored region read resolves through `Dao.sample_at`, which reads
+  `process_snapshot`, so it agrees with `state_at`, `sample_times` and
+  `region_samples` about which sample a moment means. A sample that recorded
+  no map anchors to itself and answers with nothing, which is why the
+  playback header says "no map recorded at this sample": an empty region view
+  would otherwise read as a process holding no memory. Anchored to
+  `region_snapshot` instead, such a sample resolves to an earlier one and an
+  older map is shown beside the current state, which at a pid reuse is two
+  processes on screen at once. Three separate bugs came out of that mismatch
+  before the two tables were brought into line, so a new read belongs on the
+  same anchor rather than on a guard of its own.
 - `Allowlist.__bool__` says whether it holds entries, which is not whether
   it was recorded. A recording that excused nothing gives an allowlist that
   is falsy and still governs its replay, so every choice between a recorded

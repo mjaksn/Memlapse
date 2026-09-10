@@ -279,6 +279,17 @@ class PlaybackEngine(QObject):
             return {}
         return self._dao.heads_at(self.recording_id, ts_us)
 
+    def map_recorded(self, ts_us: int) -> bool:
+        """Whether the sample being shown at ts_us recorded a region map.
+
+        False both before anything is open and at a sample whose map came
+        back empty. Kept separate from :meth:`seek` so its tuple contract is
+        unchanged, the same reason :meth:`heads` is separate.
+        """
+        if self.recording_id is None:
+            return False
+        return self._dao.map_recorded_at(self.recording_id, ts_us)
+
     def rewritten(self, ts_us: int) -> set[int]:
         """Base addresses of executable regions rewritten since the previous sample.
 
@@ -477,6 +488,10 @@ class PlaybackEngine(QObject):
         Takes the rewritten set from :meth:`rewritten` rather than working it
         out again, and reads no head content at all when that set is empty,
         which is almost every seek.
+
+        Empty at a pid reuse, like :meth:`rewritten`, so that a caller which
+        works out ``changed`` some other way cannot get a comparison across
+        two processes that this method would refuse from its usual caller.
         """
         if self.recording_id is None or not changed:
             return set()
@@ -484,6 +499,15 @@ class PlaybackEngine(QObject):
         previous = (None if anchor is None
                     else self._dao.previous_sample_ts(self.recording_id, anchor))
         if previous is None:
+            return set()
+        # The same refusal :meth:`rewritten` makes, for the same reason: the
+        # earlier half of the pair belongs to a process that merely held the
+        # same pid. Today this is reached only through `changed`, which
+        # :meth:`rewritten` has already emptied at a restart, so the guard
+        # protects against a caller that passes a set worked out some other
+        # way rather than against anything happening now. Being safe only
+        # through a caller is not being safe.
+        if any(previous < ts <= anchor for ts in self.instance_changes):
             return set()
         return unpacked_regions(
             self._dao.heads_at(self.recording_id, previous),

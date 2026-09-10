@@ -1072,3 +1072,62 @@ def test_a_sample_with_no_map_is_not_differenced_across(tmp_db):
         assert engine.rewrites_at(3_000) == {}      # and the whole-run history
     finally:
         engine.close()
+
+
+def test_map_recorded_says_which_samples_held_one(tmp_db):
+    """An empty region view is not a process holding no memory.
+
+    The anchor is the sample itself, so scrubbing to one whose map came back
+    empty shows no rows. Storage cannot tell a refused walk from a genuinely
+    empty map, since both are zero rows, but it can say the sample it
+    answered from held none, and the header says so rather than leaving the
+    analyst to read the emptiness as a clean look.
+    """
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 1, 1, 1), [EXEC_REGION],
+                   {EXEC_REGION.base_addr: b"aaa"})
+    dao.add_sample(rid, 2_000, ProcState(2_000, 1000, 1, 1, 1), [])
+    conn.close()
+
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        assert engine.map_recorded(1_000) is False    # nothing open yet
+        engine.open(rid)
+        assert engine.map_recorded(500) is False      # before the first sample
+        assert engine.map_recorded(1_000) is True
+        assert engine.map_recorded(2_000) is False
+        assert engine.seek(2_000)[1] == []            # the view it explains
+    finally:
+        engine.close()
+
+
+def test_unpacked_declines_a_pair_split_by_a_pid_reuse(tmp_db):
+    """Being safe only through one caller is not being safe.
+
+    `unpacked` is reached with the set `rewritten` produced, and `rewritten`
+    is already empty at a reuse, so today nothing can get this far. That is a
+    property of the caller rather than of this method, and the whole point of
+    unifying the anchor was to stop relying on those. Called directly with a
+    set worked out some other way, it refuses the comparison itself.
+    """
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    # Packed bytes, then code-like bytes, but under a different process.
+    dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 1, 1, 1, created_ft=111),
+                   [EXEC_REGION], {EXEC_REGION.base_addr: bytes(range(256))})
+    dao.add_sample(rid, 2_000, ProcState(2_000, 1000, 1, 1, 1, created_ft=222),
+                   [EXEC_REGION], {EXEC_REGION.base_addr: b"\x00" * 256})
+    conn.close()
+
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.instance_changes == [2_000]
+        assert engine.rewritten(2_000) == set()       # the usual caller stops
+        # and so does this, handed the set that caller would never produce
+        assert engine.unpacked(2_000, {EXEC_REGION.base_addr}) == set()
+    finally:
+        engine.close()
