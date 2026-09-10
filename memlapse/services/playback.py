@@ -361,10 +361,10 @@ class PlaybackEngine(QObject):
         The read is told what a comparable row looks like, and the answer is
         :func:`analytics.is_executable` split into the bits a query can ask
         for: committed, some execute bit set, the guard bit clear. Fetching
-        the rest and discarding it costs a fifth of a second on a two minute
-        recording and about two seconds on a ten minute one, measured in
-        ARCHITECTURE.md, "Shipped: rewrite history". Narrowing the read cannot
-        change the answer, because every row it leaves behind is one
+        the rest and discarding it costs a quarter of a second on a two
+        minute recording and about 2.7 seconds on a ten minute one, measured
+        in ARCHITECTURE.md, "Shipped: rewrite history". Narrowing the read
+        cannot change the answer, because every row it leaves behind is one
         :func:`rewritten_regions` would have refused on both sides of the
         comparison.
         """
