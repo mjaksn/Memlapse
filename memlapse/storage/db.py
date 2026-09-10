@@ -2,12 +2,12 @@
 
 WAL mode lets a collector write recordings while the UI reads for playback.
 The schema is applied idempotently on connect, so opening a fresh file just
-works: a table added since a database was created (thread_snapshot, most
+works: a table added since a database was created (recording_allowlist, most
 recently) appears on the next open. Only a change to an existing table needs
 more, and there have been four: head_hash on region_snapshot, then can_read
 and created_ft on process_snapshot, then allowlist_recorded on recording.
-Used by the recording sampler to write and
-by the playback engine to read; the live monitor does not touch it.
+Used by the recording sampler to write and by the playback engine to read;
+the live monitor does not touch it.
 """
 
 from __future__ import annotations
