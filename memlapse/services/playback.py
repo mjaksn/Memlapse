@@ -289,13 +289,12 @@ class PlaybackEngine(QObject):
 
         Also empty when the recorded process instance changed anywhere
         between the two samples being compared, because the earlier one then
-        belongs to a different process that
-        happened to hold the same pid. The live view refuses the same
-        comparison by ending the watch when a refresh finds another instance;
-        a recording cannot end, so it declines the one comparison instead.
-        Two unrelated maps differenced against each other would report a
-        stranger's memory as code overwritten in place, which is the loudest
-        thing this tool says.
+        belongs to a different process that happened to hold the same pid.
+        The live view refuses the same comparison by ending the watch when a
+        refresh finds another instance; a recording cannot end, so it
+        declines the one comparison instead. Two unrelated maps differenced
+        against each other would report a stranger's memory as code
+        overwritten in place, which is the loudest thing this tool says.
         """
         if self.recording_id is None:
             return set()
