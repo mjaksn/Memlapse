@@ -627,8 +627,9 @@ column. On `set_regions(rows, heads, rewritten, thread_starts, unpacked,
 allowed, rewrites, origin_us)` it computes a `RegionVerdict` per row and:
 
 - shows the numeric score (blank for benign rows),
-- tints suspicious rows via `theme.heat_color(score/100)` (green→amber→red,
-  translucent so text stays legible on the dark theme), and
+- tints suspicious rows via `theme.heat_color(effective_score/100)`, or a
+  neutral grey where the band is `allowlisted` (green→amber→red, translucent
+  so text stays legible on the dark theme), and
 - exposes the human-readable `reasons` as the row tooltip, followed by what
   the open recording knows about that region over the whole run (["Shipped:
   rewrite history"](#shipped-rewrite-history)). The last two arguments carry

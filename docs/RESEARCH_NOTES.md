@@ -661,8 +661,10 @@ an entry up the same way the live view does, so an entry means the same thing
 in a replay as in the watch that made it. The third, an **audit** of the
 override, is not: nothing records who excused what or when. Nor is the key
 durable, an image name rather than an image path plus publisher or a head
-hash, and entries are not written to the recording, so they do not survive a
-restart or travel with it.
+hash. Entries still do not survive a restart, since nothing persists the
+configured list, but they do now travel with a recording: `create_recording`
+writes the ones in force into `recording_allowlist` and a replay scores with
+those rather than with the reader's own.
 
 **Reputation of the backing image. New.** Reputation includes the publisher,
 whether the file is signed, the signing authority and a trust category, with
