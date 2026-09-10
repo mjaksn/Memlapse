@@ -73,7 +73,8 @@ python main.py --elevate  # relaunch elevated to read system and other users' pr
 ```
 
 Running elevated enables `SeDebugPrivilege`, required to read most system and
-other-user processes. The status bar shows the current privilege state.
+other-user processes. The status bar reports the privilege state when the
+window opens.
 
 VS Code and PyCharm each have a plain and an elevated launcher checked in, in
 `.vscode/launch.json` and `.idea/runConfigurations/`. The elevated one takes

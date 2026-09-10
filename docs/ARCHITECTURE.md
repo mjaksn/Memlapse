@@ -198,8 +198,8 @@ Each phase is usable on its own.
 
 - **Elevation:** most useful targets need admin + SeDebugPrivilege. The app
   enables the privilege on startup when it can and relaunches through UAC only
-  when started with `--elevate`; the status bar reports whether the process is
-  elevated.
+  when started with `--elevate`; the status bar reports on opening whether the
+  process is elevated.
 - **Antivirus/EDR:** `ReadProcessMemory` + guard pages against arbitrary
   processes looks exactly like malware. Fine on your own box; EDR may flag it.
 - **ETW volume:** memory events are a firehose. Needs per-PID filtering and
