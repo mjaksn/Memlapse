@@ -279,6 +279,17 @@ class PlaybackEngine(QObject):
             return {}
         return self._dao.heads_at(self.recording_id, ts_us)
 
+    def map_recorded(self, ts_us: int) -> bool:
+        """Whether the sample being shown at ts_us recorded a region map.
+
+        False both before anything is open and at a sample whose map came
+        back empty. Kept separate from :meth:`seek` so its tuple contract is
+        unchanged, the same reason :meth:`heads` is separate.
+        """
+        if self.recording_id is None:
+            return False
+        return self._dao.map_recorded_at(self.recording_id, ts_us)
+
     def rewritten(self, ts_us: int) -> set[int]:
         """Base addresses of executable regions rewritten since the previous sample.
 
@@ -304,10 +315,11 @@ class PlaybackEngine(QObject):
         previous = self._dao.previous_sample_ts(self.recording_id, anchor)
         if previous is None:
             return set()
-        # Any restart between the two, not only one landing on the anchor.
-        # The anchor comes from region_snapshot and a restart timestamp from
-        # process_snapshot, so a restart recorded on a sample whose map was
-        # empty sits between the pair without ever equalling either end.
+        # Both timestamps come from process_snapshot, so the pair is
+        # consecutive and the only restart this range can hold is one landing
+        # on the anchor itself. Kept as a range because that is the claim
+        # being made: nothing between the two samples being differenced may
+        # belong to a different process.
         if any(previous < ts <= anchor for ts in self.instance_changes):
             return set()
         return rewritten_regions(
@@ -389,19 +401,19 @@ class PlaybackEngine(QObject):
         anchored sample rather than the raw time, because a seek between two
         samples shows the earlier one.
 
-        Empty when the pid was reused between the anchor and the time asked
-        about. The anchor comes from region_snapshot and a restart from
-        process_snapshot, so a reuse recorded on a sample with no map leaves
-        the anchor sitting in the process that is gone, and its history would
-        be shown beside the new process's state. :meth:`rewritten` refuses the
-        same mismatch between a pair of samples.
+        A reuse between the anchor and the time asked about is not possible,
+        so nothing is refused here. The anchor and a restart both come from
+        process_snapshot, and a restart is itself a sample, so any restart at
+        or before ts_us is at or before the anchor. The anchor once came from
+        region_snapshot, where a reuse recorded on a sample with no map left
+        it sitting in the process that is gone; the guard that refused that
+        went with the mismatch. :meth:`rewritten` keeps its own, because a
+        restart can land exactly on the anchor of the pair it compares.
         """
         if self.recording_id is None:
             return {}
         anchor = self._dao.sample_at(self.recording_id, ts_us)
         if anchor is None:
-            return {}
-        if any(anchor < ts <= ts_us for ts in self.instance_changes):
             return {}
         found: dict[tuple[int, int, int, int], list[int]] = {}
         for identity, runs in self._spells.items():
@@ -476,6 +488,10 @@ class PlaybackEngine(QObject):
         Takes the rewritten set from :meth:`rewritten` rather than working it
         out again, and reads no head content at all when that set is empty,
         which is almost every seek.
+
+        Empty at a pid reuse, like :meth:`rewritten`, so that a caller which
+        works out ``changed`` some other way cannot get a comparison across
+        two processes that this method would refuse from its usual caller.
         """
         if self.recording_id is None or not changed:
             return set()
@@ -483,6 +499,15 @@ class PlaybackEngine(QObject):
         previous = (None if anchor is None
                     else self._dao.previous_sample_ts(self.recording_id, anchor))
         if previous is None:
+            return set()
+        # The same refusal :meth:`rewritten` makes, for the same reason: the
+        # earlier half of the pair belongs to a process that merely held the
+        # same pid. Today this is reached only through `changed`, which
+        # :meth:`rewritten` has already emptied at a restart, so the guard
+        # protects against a caller that passes a set worked out some other
+        # way rather than against anything happening now. Being safe only
+        # through a caller is not being safe.
+        if any(previous < ts <= anchor for ts in self.instance_changes):
             return set()
         return unpacked_regions(
             self._dao.heads_at(self.recording_id, previous),

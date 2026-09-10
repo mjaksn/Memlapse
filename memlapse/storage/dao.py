@@ -314,26 +314,65 @@ class Dao:
             yield ts_us, regions, digests, bool(observed)
 
     def sample_at(self, recording_id: int, ts_us: int) -> int | None:
-        """Timestamp of the region sample at or before ts_us, or None.
+        """Timestamp of the sample at or before ts_us, or None.
 
         This is the anchor every region read below resolves to, so callers
         that need two reads from the same sample can pin it once.
+
+        Read from process_snapshot, the one table holding a row per sample
+        whatever the map held, so that this agrees with :meth:`state_at`,
+        :meth:`sample_times` and :meth:`region_samples`. Taken from
+        region_snapshot instead, a sample that recorded no regions resolves
+        to an earlier one, and a caller pairing this with :meth:`state_at`
+        then puts two samples on screen at once: at a pid reuse that is the
+        thread count of the process holding the pid now beside the map of
+        the one that used to. A sample with no map anchors to itself and the
+        reads below answer nothing for it, which is the honest answer.
         """
         return self.conn.execute(
-            "SELECT MAX(ts_us) FROM region_snapshot WHERE recording_id=? AND ts_us<=?",
+            "SELECT MAX(ts_us) FROM process_snapshot WHERE recording_id=? AND ts_us<=?",
             (recording_id, ts_us),
         ).fetchone()[0]
 
     def previous_sample_ts(self, recording_id: int, ts_us: int) -> int | None:
-        """Timestamp of the region sample strictly before ts_us, or None.
+        """Timestamp of the sample strictly before ts_us, or None.
 
-        Read from region_snapshot rather than process_snapshot so a sample
-        that recorded no regions cannot put the two out of step.
+        Same table as :meth:`sample_at`, and for the same reason. This read
+        region_snapshot once, so that a sample recording no regions could not
+        put the anchor and its predecessor out of step with each other. That
+        kept the pair consistent and left both out of step with every
+        process-anchored read, which is the larger of the two mistakes.
+
+        A comparison whose earlier half recorded no map is therefore declined
+        rather than bridged, matching what :meth:`region_samples` already does
+        for the whole-run walk: a region that dropped out of the map for one
+        tick and came back holding different bytes is a different event from
+        one rewritten in place, and neither route reports it as the latter.
         """
         return self.conn.execute(
-            "SELECT MAX(ts_us) FROM region_snapshot WHERE recording_id=? AND ts_us<?",
+            "SELECT MAX(ts_us) FROM process_snapshot WHERE recording_id=? AND ts_us<?",
             (recording_id, ts_us),
         ).fetchone()[0]
+
+    def map_recorded_at(self, recording_id: int, ts_us: int) -> bool:
+        """Whether the sample anchored at ts_us recorded any region rows.
+
+        The reads below answer nothing for a sample that recorded no map, and
+        nothing is what they would also answer for a process holding no
+        memory. Storage cannot tell those two apart, since both are zero
+        rows, but it can say whether the sample it answered from held any,
+        which is what keeps an empty view from being read as a clean look at
+        an empty process. A live process always has mapped memory, so in
+        practice a sample with no rows is a walk that was refused.
+        """
+        anchor = self.sample_at(recording_id, ts_us)
+        if anchor is None:
+            return False
+        return bool(self.conn.execute(
+            "SELECT EXISTS(SELECT 1 FROM region_snapshot "
+            "WHERE recording_id=? AND ts_us=?)",
+            (recording_id, anchor),
+        ).fetchone()[0])
 
     def regions_at(self, recording_id: int, ts_us: int) -> list[Region]:
         """Region map from the latest sample at or before ts_us."""

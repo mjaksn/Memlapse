@@ -484,6 +484,36 @@ def test_playback_header_flags_a_pid_reused_mid_recording(main_window):
     assert "pid reused during this recording" in win.region_view.header.text()
 
 
+def test_playback_header_says_when_the_sample_recorded_no_map(main_window):
+    """An empty region view is not a process that held no memory.
+
+    The map is anchored to the sample being shown, so scrubbing to one whose
+    walk was refused shows no rows at all. The header carries the reason,
+    because the alternative is an analyst reading an empty list as a clean
+    look at a process with nothing in it.
+    """
+    from memlapse.model.region import (
+        MEM_COMMIT, MEM_PRIVATE, PAGE_EXECUTE_READ, Region)
+    from memlapse.storage.dao import ProcState
+    win, db = main_window
+    region = Region(0x40000, 4096, MEM_COMMIT, PAGE_EXECUTE_READ, MEM_PRIVATE)
+    conn = connect(db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 100, 50, 3), [region],
+                   {0x40000: b"aaa"})
+    dao.add_sample(rid, 2_000, ProcState(2_000, 1000, 100, 50, 3), [])
+    dao.end_recording(rid, 3_000)
+    conn.close()
+
+    win._open_recording(rid)
+    win._on_seek(1_000)
+    assert "no map recorded" not in win.region_view.header.text()
+    win._on_seek(2_000)
+    assert "(no map recorded at this sample)" in win.region_view.header.text()
+    assert win.region_view.model.rowCount() == 0    # the view it explains
+
+
 # --- the recording's rewrites reach both places that show them --------------
 def _seed_rewrite(db, first_us=5_000_000, gap_us=251_000_000):
     """A recording of one executable region whose bytes change once."""

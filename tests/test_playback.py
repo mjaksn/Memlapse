@@ -457,11 +457,13 @@ def test_describe_rewrites_carries_past_an_hour():
 def test_a_restart_on_a_sample_with_no_map_still_stops_the_comparison(tmp_db):
     """The restart need not land on the sample being scored.
 
-    An anchor comes from region_snapshot and a restart timestamp from
-    process_snapshot, so a reuse recorded on a sample whose map came back
-    empty sits between the two samples being differenced without equalling
-    either end. Asking only whether the anchor is itself a restart lets that
-    pair through, and the two halves belong to different processes.
+    The pair being differenced is the anchor and the sample before it, both
+    from process_snapshot, so a reuse recorded on a sample whose map came back
+    empty is the earlier half of the pair rather than something between them.
+    That half recorded no map, so there are no hashes to difference and the
+    comparison does not happen at all. Either route has to reach the same
+    answer, since two unrelated maps differenced against each other would
+    report a stranger's memory as code overwritten in place.
     """
     conn = connect(tmp_db)
     dao = Dao(conn)
@@ -479,7 +481,8 @@ def test_a_restart_on_a_sample_with_no_map_still_stops_the_comparison(tmp_db):
     try:
         engine.open(rid)
         assert engine.instance_changes == [2_000]
-        # 1_000 and 3_000 are the anchor pair, and 2_000 is neither of them.
+        # The pair is 2_000 and 3_000, and 2_000 recorded no map, so there
+        # is nothing on the earlier side to difference against.
         assert engine.rewritten(3_000) == set()
         assert engine.rewrites == {}
     finally:
@@ -957,13 +960,14 @@ def test_a_failed_walk_is_let_go_of_too(tmp_db):
 
 
 def test_a_reuse_with_no_map_does_not_show_the_old_history(tmp_db):
-    """The anchor can be older than the process being asked about.
+    """A new process is not shown the history of the one that held the pid.
 
-    An anchor comes from region_snapshot and a restart from
-    process_snapshot, so a reuse recorded on a sample with no map leaves the
-    anchor sitting in the process that is gone. The state line says the new
-    process while the history would answer for the old one, which is the
-    mismatch `rewritten` already refuses between a pair of samples.
+    The anchor is the sample being asked about, so at a reuse it is the
+    reuse's own sample rather than the last one that carried a map. Nothing
+    is live there: the walk clears every spell at a restart, and a sample
+    that recorded no map opens none. The history the old process built stays
+    with the samples it was built in, which is what keeps a row in the new
+    process from being shown the old one's rewrites.
     """
     conn = connect(tmp_db)
     dao = Dao(conn)
@@ -982,8 +986,148 @@ def test_a_reuse_with_no_map_does_not_show_the_old_history(tmp_db):
         engine.open(rid)
         assert engine.instance_changes == [3_000]
         assert engine.rewrites_at(2_000) == {EXEC_IDENTITY: [2_000]}
-        # At and after the reuse the anchor is still 2_000, in the process
-        # that no longer exists.
+        # The anchor is 3_000, the reuse's own sample, where nothing is live.
         assert engine.rewrites_at(3_000) == {}
+    finally:
+        engine.close()
+
+
+def test_seek_answers_from_one_sample_at_every_position(tmp_db):
+    """A seek describes one moment, so both halves come from one sample.
+
+    The timeline scrubs `sample_times`, which is `process_snapshot`, the one
+    table holding a row per sample whatever the map held. The map used to be
+    resolved against `region_snapshot` instead, so a position the timeline
+    offers could have no row there and the older map was shown beside the
+    newer state. At a pid reuse that is two processes on screen at once: the
+    header counts the threads of the process that holds the pid now and the
+    rows describe the one that used to.
+
+    Asserted across every position rather than at the interesting one, since
+    the point is that no position can pair two samples.
+    """
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 1, 1, 3, created_ft=111),
+                   [EXEC_REGION], {0x10000: b"aaa"})
+    dao.add_sample(rid, 2_000, ProcState(2_000, 1000, 1, 1, 4, created_ft=111),
+                   [EXEC_REGION], {0x10000: b"bbb"})
+    # The pid is reused and this sample's map came back empty, which is what a
+    # target on its way out gives: the handle opened, the walk was refused.
+    dao.add_sample(rid, 3_000, ProcState(3_000, 1000, 1, 1, 77, created_ft=222),
+                   [])
+    conn.close()
+
+    engine = PlaybackEngine(db_path=tmp_db)
+    reader = connect(tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.sample_times == [1_000, 2_000, 3_000]
+        anchors = Dao(reader)
+        for ts in engine.sample_times:
+            state, _ = engine.seek(ts)
+            assert state.ts_us == anchors.sample_at(rid, ts), (
+                f"at {ts} the state and the map come from different samples")
+        # The visible half of the same claim: a sample that recorded no map
+        # shows none, rather than the previous process's.
+        assert engine.seek(3_000)[1] == []
+    finally:
+        reader.close()
+        engine.close()
+
+
+def test_a_sample_with_no_map_is_not_differenced_across(tmp_db):
+    """Both routes decline to compare across a sample that recorded no map.
+
+    A region that dropped out of the map for one tick and came back holding
+    different bytes is a different event from one rewritten in place, and
+    saying the louder of the two would be a claim the recording cannot
+    support. The whole-run walk has always declined it, by resetting what it
+    compares against at a sample with no rows. The per-sample flag reaches
+    the same answer by taking the sample before the anchor from
+    process_snapshot: the previous sample is the one that recorded nothing,
+    so there are no hashes on that side to difference.
+
+    Taken from region_snapshot the previous sample would be 1_000 instead,
+    skipping over the gap entirely, and the flag would call this a rewrite
+    while the history beside it stayed silent.
+    """
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    for ts, regions, head in ((1_000, [EXEC_REGION], b"aaa"),
+                              (2_000, [], None),          # the map came back empty
+                              (3_000, [EXEC_REGION], b"bbb")):
+        dao.add_sample(rid, ts, ProcState(ts, 1000, 1, 1, 1, created_ft=111),
+                       regions,
+                       None if head is None else {EXEC_REGION.base_addr: head})
+    conn.close()
+
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.instance_changes == []        # one process throughout
+        assert engine.rewritten(3_000) == set()     # the per-sample flag
+        assert engine.rewrites_at(3_000) == {}      # and the whole-run history
+    finally:
+        engine.close()
+
+
+def test_map_recorded_says_which_samples_held_one(tmp_db):
+    """An empty region view is not a process holding no memory.
+
+    The anchor is the sample itself, so scrubbing to one whose map came back
+    empty shows no rows. Storage cannot tell a refused walk from a genuinely
+    empty map, since both are zero rows, but it can say the sample it
+    answered from held none, and the header says so rather than leaving the
+    analyst to read the emptiness as a clean look.
+    """
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 1, 1, 1), [EXEC_REGION],
+                   {EXEC_REGION.base_addr: b"aaa"})
+    dao.add_sample(rid, 2_000, ProcState(2_000, 1000, 1, 1, 1), [])
+    conn.close()
+
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        assert engine.map_recorded(1_000) is False    # nothing open yet
+        engine.open(rid)
+        assert engine.map_recorded(500) is False      # before the first sample
+        assert engine.map_recorded(1_000) is True
+        assert engine.map_recorded(2_000) is False
+        assert engine.seek(2_000)[1] == []            # the view it explains
+    finally:
+        engine.close()
+
+
+def test_unpacked_declines_a_pair_split_by_a_pid_reuse(tmp_db):
+    """Being safe only through one caller is not being safe.
+
+    `unpacked` is reached with the set `rewritten` produced, and `rewritten`
+    is already empty at a reuse, so today nothing can get this far. That is a
+    property of the caller rather than of this method, and the whole point of
+    unifying the anchor was to stop relying on those. Called directly with a
+    set worked out some other way, it refuses the comparison itself.
+    """
+    conn = connect(tmp_db)
+    dao = Dao(conn)
+    rid = dao.create_recording(1000, "proc.exe", 0)
+    # Packed bytes, then code-like bytes, but under a different process.
+    dao.add_sample(rid, 1_000, ProcState(1_000, 1000, 1, 1, 1, created_ft=111),
+                   [EXEC_REGION], {EXEC_REGION.base_addr: bytes(range(256))})
+    dao.add_sample(rid, 2_000, ProcState(2_000, 1000, 1, 1, 1, created_ft=222),
+                   [EXEC_REGION], {EXEC_REGION.base_addr: b"\x00" * 256})
+    conn.close()
+
+    engine = PlaybackEngine(db_path=tmp_db)
+    try:
+        engine.open(rid)
+        assert engine.instance_changes == [2_000]
+        assert engine.rewritten(2_000) == set()       # the usual caller stops
+        # and so does this, handed the set that caller would never produce
+        assert engine.unpacked(2_000, {EXEC_REGION.base_addr}) == set()
     finally:
         engine.close()

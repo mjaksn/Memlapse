@@ -158,6 +158,19 @@ mem_event(id, recording_id, ts_us, tid, kind, addr, size, protect)  -- ETW-sourc
   reporting that as a denial would be exactly the confident wrong statement
   the band rule refuses to make. `storage/db.py` adds both to an older
   database on open.
+- Every anchored read resolves through `Dao.sample_at`, which reads
+  `process_snapshot`, the one table holding a row per sample whatever the map
+  held. That is what makes `state_at`, `sample_times`, `region_samples` and
+  the region reads agree on which sample a given moment means, so a seek
+  cannot pair one sample's process stats with another sample's map. A sample
+  whose map came back empty therefore anchors to itself and its region reads
+  answer nothing, rather than quietly handing back the map from an earlier
+  one. `Dao.map_recorded_at` says which of those an empty list is, and the
+  playback header adds "no map recorded at this sample" so the emptiness is
+  not read as a process holding no memory. Anchored to `region_snapshot`
+  instead, as this once was, such a sample resolves to an earlier one, and at
+  a pid reuse that puts the thread count of the process holding the pid now
+  beside the map of the one that used to.
 - `mem_event.tid` powers "play back this thread's activity."
 - Index on `(recording_id, ts_us)` and `(recording_id, tid, ts_us)`.
 - Store `ts_us` as **integer microseconds**, not text.
