@@ -30,12 +30,15 @@ installable package, a service, or a blocking security product.
   region save.
 - `docs/ARCHITECTURE.md` explains the design and the heuristics; `docs/RESEARCH_NOTES.md`
   holds the reference reading and the ideas queued for later phases.
+- `scripts/lock_hashes.py`: writes the hashes into the requirements files (see
+  Conventions). Not part of the application and not under coverage.
 
 ## Environment
 
 - Language and version: Python 3.14 (CPython); the code uses `from __future__ import
   annotations` and PEP 604 unions throughout.
-- Package manager: pip with hash-locked requirements compiled by `uv pip compile`.
+- Package manager: pip, from requirements files pinned by version and hash, the
+  hashes written by `scripts/lock_hashes.py`. No resolver is involved.
 - Platform constraints: Windows only. Reading other users' and system processes needs an
   elevated process with `SeDebugPrivilege`; unelevated, the process list is complete but
   memory maps and reads fall back or are denied.
@@ -56,14 +59,20 @@ pip install -r requirements-dev.txt
 | Type check | none configured |
 | Format | none configured; 4-space indent, lines mostly within 88 columns |
 | Run | `python main.py` (`python main.py --elevate` relaunches through UAC) |
+| Lock hashes | `python scripts/lock_hashes.py requirements.txt requirements-dev.txt` (`--check` writes nothing, exits 1 if stale) |
 
 Every command in this table has been run in this repo and its output verified. If one
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
-Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06). The test run is 465 passed with 100 percent line and branch
-coverage (2026-09-10), run from a scratch venv holding the test tools, since
-the project venv has none of them (see the first gotcha below).
+Verified in a fresh venv: the install resolves and hash-checks 17 packages,
+and the test run is 465 passed with 100 percent line and branch coverage
+(both 2026-09-10), run from a scratch venv holding the test tools, since the
+project venv has none of them (see the first gotcha below). `python main.py`
+was last checked by starting it headless (`QT_QPA_PLATFORM=offscreen`) under
+`-X dev`; it stayed up with no warnings until stopped (2026-09-10). The lock
+hashes command rewrote both files with the same 247 package and digest pairs
+the old uv output held, and `--check` then reported both current
+(2026-09-10).
 
 ## Conventions
 
@@ -83,10 +92,15 @@ the project venv has none of them (see the first gotcha below).
   in Python-level per-process work. Prefer one bulk syscall (see `win32/processes.py`)
   and precomputed display strings in the model. The reasons are recorded in
   `docs/ARCHITECTURE.md` under "Layered architecture".
-- Dependencies are pinned by version and hash. To add or change one, edit
-  `requirements.in` or `requirements-dev.in`, then regenerate with the `uv pip compile`
-  command written at the top of the corresponding `.txt`. Never hand-edit the `.txt` files
-  and never add a bare `>=` requirement.
+- Dependencies are pinned by version and hash. Every package is named with `==`,
+  including what the direct dependencies need, since nothing resolves the files: a
+  pin with a `# via` line is one of those. To add or move one, edit the pin by hand,
+  add anything new it needs, then run the lock hashes command above. Never write a
+  `--hash` line by hand and never add a bare `>=` requirement. PySide6, its two
+  halves and shiboken6 move together.
+- `scripts/lock_hashes.py` is a copy of `lock-hashes/lock_hashes.py` from the
+  toolshed repository at 88d47d8, kept byte for byte. Change it there, not here;
+  copies of it that were edited in place are why it moved to toolshed.
 - Timestamps in SQLite are integer microseconds (`ts_us`); the database runs in WAL mode.
 - Prose anywhere in the repo (docs, comments, docstrings, UI strings, commit messages)
   uses no em dashes and no double hyphens as punctuation. Hyphenated words and command
@@ -222,7 +236,8 @@ the project venv has none of them (see the first gotcha below).
 
 - Do not push, open or edit pull requests or issues, or take any other action that
   leaves this machine, without explicit permission.
-- `requirements.txt` and `requirements-dev.txt` are generated; edit the `.in` files.
+- The `--hash` lines in `requirements.txt` and `requirements-dev.txt` are written by
+  `scripts/lock_hashes.py`, never by hand, and that script is edited in toolshed.
 - Never add a write, protection-change or remote-thread primitive to `memlapse/win32/`.
   The tool reads memory only; that boundary is what keeps it distinguishable from an
   injector to an EDR.

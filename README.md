@@ -90,9 +90,10 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-Dependencies are pinned by version and hash. The `.in` files list the direct
-dependencies; regenerate the lock files with the `uv pip compile` command noted
-at the top of each.
+Dependencies are pinned by version and hash. The requirements files name every
+package with an exact version, and `scripts/lock_hashes.py` writes the hashes
+under each pin from the digests PyPI reports; the top of `requirements.txt`
+says how to move a version.
 
 ## Licence
 

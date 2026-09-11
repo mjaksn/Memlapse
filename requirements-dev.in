@@ -1,6 +1,0 @@
-# Test tooling on top of the runtime dependencies. Regenerate with:
-#   uv pip compile --generate-hashes --universal requirements-dev.in -o requirements-dev.txt
--r requirements.in
-pytest==9.1.1
-pytest-qt==4.5.0
-pytest-cov==7.1.0

@@ -15,10 +15,14 @@ updates:
       prefix: "ci"
     open-pull-requests-limit: 3
 
-  # requirements.txt and requirements-dev.txt are compiled from the .in files
-  # beside them with hashes. Dependabot rewrites the --hash lines along with
-  # the version, which is the only thing that keeps a hash pin from being a
-  # pin that never moves again.
+  # requirements.txt and requirements-dev.txt name every package with an exact
+  # version and its hashes, written by scripts/lock_hashes.py. Dependabot
+  # rewrites the --hash lines along with the version, which is the only thing
+  # that keeps a hash pin from being a pin that never moves again.
+  #
+  # Nothing resolves those files, so nothing else knows that PySide6 pins its
+  # two halves and shiboken6 to its own version. Moved one at a time, each
+  # pull request would fail the install; grouped, the four move in one.
   - package-ecosystem: pip
     directory: "/"
     schedule:
@@ -28,3 +32,6 @@ updates:
     commit-message:
       prefix: "deps"
     open-pull-requests-limit: 3
+    groups:
+      pyside:
+        patterns: ["pyside6*", "shiboken6"]
