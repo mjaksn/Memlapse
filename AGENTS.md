@@ -65,7 +65,7 @@ and the test run is 465 passed with 100 percent line and branch coverage
 (both 2026-09-10), run from a scratch venv holding the test tools, since the
 project venv has none of them (see the first gotcha below). `python main.py`
 was last checked by starting it headless (`QT_QPA_PLATFORM=offscreen`) under
-`-X dev`; it stayed up with no warnings until stopped.
+`-X dev`; it stayed up with no warnings until stopped (2026-09-10).
 
 ## Conventions
 
