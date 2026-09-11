@@ -1,11 +1,11 @@
-# Research notes: what the reference material suggests for Memlapse
+# Research notes: what the reference material suggests for memlapse
 
 This document distils six reference sources that were read while designing
-Memlapse into the ideas that matter for its development. It replaces the
+memlapse into the ideas that matter for its development. It replaces the
 folder of source documents that used to live in the repository; every claim
 below carries a citation to the public original so it can be checked without
 that folder. Each entry separates what the source says (quoted or cited) from
-what that implies for Memlapse; sections 1 to 5 label the two parts
+what that implies for memlapse; sections 1 to 5 label the two parts
 explicitly, and section 7 runs them together in one paragraph per entry. The
 implication is always this project's own inference and should not be read as
 the source's recommendation.
@@ -14,7 +14,7 @@ Entries are tagged against the code and the plan in
 [ARCHITECTURE.md](ARCHITECTURE.md) as of September 2026:
 
 - **New**: nothing in the code or the roadmap covers it.
-- **Refines**: Memlapse has the feature; the source suggests a better version.
+- **Refines**: memlapse has the feature; the source suggests a better version.
 - **Corroborates**: independent support for a decision already taken.
 
 The sources are abbreviated in citations as [T], [C], [K20], [K22], [D24] and
@@ -72,7 +72,7 @@ to "Scan for Cobalt Strike beacons in memory" [C, §3]. Kara likewise cites the
 use of "Yara, which can identify malware without downloading it" for fileless
 code elements [K22, §2].
 
-**Implication.** Memlapse already stores the first 256 bytes of every
+**Implication.** memlapse already stores the first 256 bytes of every
 executable region per sample. A YARA pass over stored heads, or over a full
 region dump (see 4.1), would turn the heuristic score into an attributable
 match. This introduces a third-party dependency (`yara-python`) and a rule
@@ -89,7 +89,7 @@ naturally" [T, "Core Functionality"; "What Makes RWX Regions Dangerous?"]. The
 defensive advice is to "Minimize use of RWX permissions in applications"
 [T, "Protecting Against RWX Exploitation"].
 
-**Implication.** Memlapse scores RWX as a sign that injection may have
+**Implication.** memlapse scores RWX as a sign that injection may have
 happened. Trovent shows pre-existing RWX is also where the next injection will
 land. A system-wide RWX census on the dashboard (which processes expose
 writable executable memory, how much, and whether it is `MEM_PRIVATE`,
@@ -107,7 +107,7 @@ injection chains ends four of its five rows in a thread primitive:
 `SetThreadContext`, and `QueueUserAPC` [C, §2 "Process Injection Detection via
 API Call Monitoring"].
 
-**Implication.** Memlapse records a thread count per process and nothing about
+**Implication.** memlapse records a thread count per process and nothing about
 individual threads. Enumerating threads (`NtQuerySystemInformation` already
 returns them) and resolving each start address
 (`NtQueryInformationThread` with `ThreadQuerySetWin32StartAddress`) allows a
@@ -149,7 +149,7 @@ API hooking, DLL injection and Hidden processes" [K20, p. 47]. Kara notes
 "all processes are visible in memory at run-time" because "malware must expose
 the majority of important information ... in memory to function" [K22, §1.3].
 
-**Implication.** Memlapse lists processes from a single
+**Implication.** memlapse lists processes from a single
 `NtQuerySystemInformation` call. Comparing that list against a second, cheap
 enumeration (for example `EnumProcesses`, or opening each PID in a range) and
 against the parents named by surviving processes would surface a process
@@ -161,7 +161,7 @@ both views, but it is nearly free to implement on top of the existing collector.
 
 ## 2. Signals that need time
 
-Recording is what Memlapse has that a snapshot tool does not. Each entry here
+Recording is what memlapse has that a snapshot tool does not. Each entry here
 is a detector that only exists because consecutive samples can be compared.
 
 ### 2.1 Content changes in a region whose protection never changes. Shipped
@@ -244,7 +244,7 @@ Excel, or a browser" [C, "Threat Hunting Hypotheses", Hypothesis 2].
 less than a second, and the process model has no parent PID or command line.
 Subscribing to the kernel process provider in the planned ETW collector
 (process start and stop events carry parent PID, image path and command line)
-would let Memlapse record every process that ever existed during a recording,
+would let memlapse record every process that ever existed during a recording,
 build the parent-child tree at creation time, and flag known-bad pairs. The
 process table itself should gain parent PID and command line regardless, since
 `NtQuerySystemInformation` already returns the parent.
@@ -265,7 +265,7 @@ cited classification accuracy "above 90 % in almost every feature (function
 calls, DLLs, API calls)" [K22, §1.3, citing Aghaeikheirabady et al. 2014]. The
 same section notes this suits servers that "run distinct and unique programs".
 
-**Implication.** Memlapse records one process over one session. A baseline
+**Implication.** memlapse records one process over one session. A baseline
 profile per image name (typical count of executable private regions, RWX bytes,
 module set, entropy distribution) captured from a trusted run would let every
 later run or instance be diffed against it, and would turn the JIT problem
@@ -296,7 +296,7 @@ the target) is a new column for `mem_event`.
 
 ## 3. Process-level context
 
-Memlapse is a memory tool, but the sources keep pairing memory findings with a
+memlapse is a memory tool, but the sources keep pairing memory findings with a
 small amount of process context to make them actionable.
 
 ### 3.1 Per-process network connections. New
@@ -336,7 +336,7 @@ analysis" with `windows.memmap --pid 1234 --dump` and captures a full memory
 image with tools like WinPmem [C, §3; "Incident Response for Fileless Malware",
 step 2].
 
-**Implication.** Memlapse stores 256-byte heads and shows a hex preview. A
+**Implication.** memlapse stores 256-byte heads and shows a hex preview. A
 "save region bytes" action in the region view and a "write minidump" action
 for the process (`MiniDumpWriteDump` with full memory) would hand evidence to
 YARA, a disassembler or Volatility without a second tool. Both are one
@@ -360,7 +360,7 @@ restarting and to capture memory immediately [C, "Incident Response for
 Fileless Malware", steps 1 and 2].
 
 **Implication.** When a region crosses the "likely injection" threshold during
-a recording, Memlapse could automatically capture the full contents of that
+a recording, memlapse could automatically capture the full contents of that
 region (not just its head) and optionally a process minidump, so the payload is
 preserved even if the process exits before the analyst looks. This is the
 recording engine's natural extension from "sample the map" to "preserve the
@@ -374,7 +374,7 @@ tools are used by different experts and the same processes are followed"
 [K22, §3.4].
 
 **Implication.** A recording already is a portable SQLite file. Adding a
-manifest table (Memlapse version, host name, OS build, elevation state, sampler
+manifest table (memlapse version, host name, OS build, elevation state, sampler
 interval, and a hash of the recording) and a "export recording" action would
 make a recording something an analyst can hand over and someone else can
 replay and re-score with confidence.
@@ -406,7 +406,7 @@ DSL" [C, "Detection Rules: Sigma Signatures for Fileless Activity"].
 **Implication.** The scorer's weights and thresholds are constants in
 `analytics.py`. Moving them to a small declarative table (and emitting findings
 as JSON with the same field names the reasons use) would let users tune weights
-without editing code and feed Memlapse findings into whatever they already
+without editing code and feed memlapse findings into whatever they already
 collect. This is a modest refactor, not a new engine.
 
 ---
@@ -424,18 +424,18 @@ tRWXix and tRWXiu"].
 
 **Implication.** Whatever API the attacker used, the result in the target's
 address space is the same: bytes that changed, a thread that started in
-private memory, or a protection that flipped. Memlapse inspects the result, not
+private memory, or a protection that flipped. memlapse inspects the result, not
 the call, so the evasion in this article does not apply to it. It does apply to
 any future detector built on user-mode API hooking, which is a reason to prefer
 kernel ETW over hooks.
 
-### 5.2 Memlapse itself looks like an injector to an EDR. Corroborates
+### 5.2 memlapse itself looks like an injector to an EDR. Corroborates
 
 **Source.** The attack tools use "OpenProcess", "VirtualQueryEx",
 "WriteProcessMemory" and "CreateRemoteThread", "Windows APIs commonly
 associated with malware development" [T, "Technical Implementation"].
 
-**Implication.** Memlapse calls the first two of these on every tick and reads
+**Implication.** memlapse calls the first two of these on every tick and reads
 memory with `ReadProcessMemory`. ARCHITECTURE.md already warns that EDR may
 flag it. A note in the README, and never adding a write or thread-creation
 primitive, keeps the tool on the right side of that line.
@@ -460,7 +460,7 @@ the system out of real-time mode"; sandbox-aware malware "has been known to
 shut down instantly" [K22, §4]. Sandboxes and multi-engine scanners "struggled
 to detect threats in fileless malware" [D24, §9].
 
-**Implication.** This is the positioning argument for Memlapse: continuous,
+**Implication.** This is the positioning argument for memlapse: continuous,
 low-overhead sampling of a live process on the real host, with history, sits
 between a point-in-time dump and a full EDR.
 
@@ -484,7 +484,7 @@ as honeypots and honeytokens, to lure and trap fileless malware" [D24, §8.1].
 Trovent shows injectors that scan every accessible process for RWX regions to
 overwrite [T, "Core Functionality"].
 
-**Implication.** Combining the two: Memlapse could allocate a small RWX region
+**Implication.** Combining the two: memlapse could allocate a small RWX region
 in its own process (or a helper) filled with a known pattern, and check it each
 tick. Any change means something on the host is writing into foreign RWX
 memory. This is the one entry here that neither source proposes; it follows
@@ -500,7 +500,7 @@ logging and constrained language mode [C, §1; K20, p. 48], registry-resident
 payloads such as Poweliks and Kovter [K22, §1.1, §3.7], WMI event-subscription
 persistence [C, §4; K22, §1.1], AMSI telemetry [C, §5], LOLBin parent-child
 rules [C, sigma_rule_02], and organisational controls such as application
-allowlisting, zero trust and user training [D24, §7]. Memlapse should stay a
+allowlisting, zero trust and user training [D24, §7]. memlapse should stay a
 memory tool. The one exception is 2.4: process lineage is cheap to record and
 is the context every one of these sources reaches for first.
 
@@ -514,10 +514,10 @@ page protections, entropy, YARA, `MZ` headers, `VirtualAlloc` or ETW, so it
 neither supports nor contradicts the region-level point values in
 ARCHITECTURE.md, and its fileless coverage is script-centric (PowerShell,
 VBScript and JScript captured through AMSI) and detect-only [V, p. 423]. Native
-code injection, which is Memlapse's target, is outside its stated scope. What
+code injection, which is memlapse's target, is outside its stated scope. What
 it does offer is a worked example of how a mature product turns raw detections
 into something an analyst can use: scoring, aggregation, tuning, retention and
-presentation. Those layers are where Memlapse is thinnest, so this section is
+presentation. Those layers are where memlapse is thinnest, so this section is
 long relative to the product's direct relevance.
 
 ### 7.1 Scoring
@@ -526,7 +526,7 @@ long relative to the product's direct relevance.
 banded 0 to 29 benign, 30 to 69 suspicious, 70 to 100 malicious, and 30 is
 also the cutoff for forwarding an event to correlation: "Suspicious or
 malicious file events (scoring 30 or above) are sent to Network Detection and
-Response" [V, p. 458, p. 486]. Memlapse had no threshold at all in the code:
+Response" [V, p. 458, p. 486]. memlapse had no threshold at all in the code:
 every non-zero score was tinted alike, so nothing told an analyst which of
 them was worth a second look. A three-band display (with 30 as the floor of
 "review") costs nothing and matches the additive scale already in use.
@@ -542,7 +542,7 @@ former. See ARCHITECTURE.md for the survey that settled it.
 Severity / 100" [V, p. 513]; severity is a property of the threat type,
 confidence of how it was detected, and a per-detector baseline confidence
 rises "if the activity looks periodic" or repeats within one event [V,
-p. 512]. Memlapse's additive score mixes the two. Giving each heuristic its
+p. 512]. memlapse's additive score mixes the two. Giving each heuristic its
 own confidence, and raising it when a region stays executable across many
 samples, would let a single RWX region (severe, uncertain) rank differently
 from a repeated `MZ`-in-private-memory hit (severe, confident). This pairs
@@ -559,7 +559,7 @@ score and a distinct "allowlisted" verdict rather than filtering it out.
 **Process score is the maximum of its parts. New.** The Processes tab shows
 "the maximum threat score computed for the in-memory script execution" for
 each process, and campaign graph nodes are coloured by "the highest impact
-score from its associated detections" [V, p. 458, p. 506]. Memlapse scores
+score from its associated detections" [V, p. 458, p. 506]. memlapse scores
 regions only. A process column holding the maximum region score plus a count
 of scored regions would give the process table one sortable threat column and
 a colouring rule.
@@ -574,7 +574,7 @@ if no single region reaches 75.
 mode "for a more accurate score" and a Relaxed mode with "less severe
 penalties" [V, p. 258, p. 273]. A developer-machine mode that lowers the
 weight of executable private memory for known JIT hosts, without hiding them,
-is the Memlapse analogue and a gentler tool than an allowlist.
+is the memlapse analogue and a gentler tool than an allowlist.
 
 ### 7.2 Aggregation and correlation
 
@@ -584,7 +584,7 @@ detected at a specific point in time"; the platform "aggregates similar
 activity affecting the same workload, within a period of up to 24 hours",
 shows one row with Total Inspections, First Inspected and Last Inspected, and
 keeps "the history of all previous inspections" one click away [V, p. 455 to
-457, p. 511]. Memlapse stores one region map per sample, so a region that
+457, p. 511]. memlapse stores one region map per sample, so a region that
 scores for ten minutes produces six hundred identical verdicts. A findings
 table keyed on process, region base and heuristic, with first seen, last seen
 and hit count, is the missing layer between samples and the analyst. The
@@ -609,7 +609,7 @@ campaign that is auto-named "using a heuristic, based on the malicious
 activity that is initially correlated", renameable, timed, and scored by how
 many assets it touches [V, p. 485, p. 500 to 503]. An "incident" grouping an
 injector process, its target and the regions involved would be the equivalent
-unit on Memlapse's timeline once ETW attribution exists.
+unit on memlapse's timeline once ETW attribution exists.
 
 **Record who acted and who was acted on as separate fields. New.** "Attack
 direction indicates which system is malicious, marked in red", drawn apart
@@ -688,7 +688,7 @@ JIT-heavy process from re-alerting every sample.
 adjusted" from stored size and daily intake, so a 30-day setting becomes 15
 days when the disk fills on day 15; ingestion pauses when "available space <
 20GB or 10% of total storage, whichever is higher" and resumes only with two
-days of predicted headroom [V, p. 414, p. 415]. Memlapse's recorder has no
+days of predicted headroom [V, p. 414, p. 415]. memlapse's recorder has no
 retention policy and no disk check; a size cap that drops the oldest samples,
 shows the effective retention, and pauses with a visible banner is the direct
 transfer.
@@ -704,7 +704,7 @@ long recordings could downsample old samples the same way.
 **Count what you drop. New.** The platform reports rate-limited and purged
 events by category, and the sensor separates "Packets Dropped", meaning
 overwhelmed, from bypassed, meaning deliberately skipped [V, p. 214, p. 537].
-Memlapse's latest-only delivery discards intermediate samples by design;
+memlapse's latest-only delivery discards intermediate samples by design;
 counting and showing skipped samples per collector makes that honest.
 **Shipped:** the `skipped` counter in `collectors/base.py` now reaches the
 status bar, which reads "N processes, M process polls dropped" whenever a
@@ -713,7 +713,7 @@ stream has dropped any, naming each stream separately.
 **State your limits and warn at 90 percent. New.** The product publishes
 numeric ceilings (events per window, rows displayed, file size analysed) and
 shows "a warning banner" when a configured maximum reaches 90 percent
-[V, p. 27, p. 230, p. 411]. Memlapse should document its own maxima (samples
+[V, p. 27, p. 230, p. 411]. memlapse should document its own maxima (samples
 per recording, regions per sample rendered) and warn before hitting them.
 
 ### 7.5 Presentation
@@ -724,17 +724,17 @@ the bubble denotes the threat score computed for the file", bubble size
 encodes how many inspections were merged, allowlisted items move to a gray
 lane, and clicking a bubble jumps to the table row [V, p. 447, p. 454 to 459].
 A window slider under the chart splits merged bubbles as the range narrows
-[V, p. 419]. This maps directly onto Memlapse's recording timeline: a bubble
+[V, p. 419]. This maps directly onto memlapse's recording timeline: a bubble
 at the sample where a region first crossed a threshold, laned by verdict.
 
 **Show the score and its components. New.** Impact appears as a number in a
 hexagon with a coloured border and a text label, and hovering reveals the
-confidence and severity behind it [V, p. 419]. If Memlapse adopts confidence
+confidence and severity behind it [V, p. 419]. If memlapse adopts confidence
 times severity, this is the display.
 
 **Every detector explains itself. New.** The detector name in a row opens a
 dialog with its goal, ATT&CK category and an abstract [V, p. 419]. Each
-Memlapse reason string (private executable, RWX, NOP sled, entropy) could open
+memlapse reason string (private executable, RWX, NOP sled, entropy) could open
 a short note on what the signal means and its common false positives, which
 is also where the JIT caveat belongs.
 
@@ -763,7 +763,7 @@ allowlisted flags) is a reasonable checklist for what each line should carry
 
 **Report formats. New.** Analysis reports export to XML, JSON and PDF with
 downloadable artefacts, and rule analysis exports "a separate CSV file for
-each anomaly type" inside one archive [V, p. 386, p. 460, p. 462]. Memlapse has
+each anomaly type" inside one archive [V, p. 386, p. 460, p. 462]. memlapse has
 CSV and JSON of the dashboard window; a printable summary of a recording, and
 a per-heuristic split of findings, would complete the set.
 
@@ -782,7 +782,7 @@ are cited by their section headings.
   <https://trovent.io/en/exploiting-rwx-memory-regions/>.
   A practitioner write-up with working proof-of-concept tools (tRWXi, tRWXix,
   tRWXiu). Short, concrete and the most directly useful of the six for
-  Memlapse's detection design.
+  memlapse's detection design.
 - **[C]** CyberDefenders. *Fileless Malware Detection: How SOC Teams Hunt
   In-Memory Attacks.* 13 May 2026.
   <https://cyberdefenders.org/blog/fileless-malware-soc-detection/>.

@@ -118,7 +118,7 @@ jobs:
           }
           for key, value in want.items():
               assert fields.get(key) == value, f"{key}: {fields.get(key)}, wanted {value}"
-          assert body.startswith("# Memlapse"), "the README is not the long description"
+          assert body.startswith("# memlapse"), "the README is not the long description"
           # The sdist is meant to be able to test itself; MANIFEST.in says why.
           with tarfile.open(sdist) as archive:
               members = {name.partition("/")[2] for name in archive.getnames()}

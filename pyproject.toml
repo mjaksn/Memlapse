@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "memlapse"
-version = "0.1.0"
+version = "0.1.1"
 description = "A Windows memory forensics tool that records a process's memory map over time, replays it, and scores each region for signs of code injection"
 readme = "README.md"
 # The one interpreter CI runs. The code would parse on older ones, but a claim
@@ -52,10 +52,10 @@ dependencies = [
 memlapse = "memlapse.app:main"
 
 [project.urls]
-Homepage = "https://github.com/mjaksn/Memlapse"
-Source = "https://github.com/mjaksn/Memlapse"
-Issues = "https://github.com/mjaksn/Memlapse/issues"
-Changelog = "https://github.com/mjaksn/Memlapse/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/mjaksn/memlapse"
+Source = "https://github.com/mjaksn/memlapse"
+Issues = "https://github.com/mjaksn/memlapse/issues"
+Changelog = "https://github.com/mjaksn/memlapse/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 # The package and its subpackages and nothing else. tests/ and scripts/ sit

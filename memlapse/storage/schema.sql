@@ -1,4 +1,4 @@
--- Memlapse storage schema. See docs/ARCHITECTURE.md for the data model rationale.
+-- memlapse storage schema. See docs/ARCHITECTURE.md for the data model rationale.
 -- Timestamps are integer microseconds since the Unix epoch (UTC).
 
 CREATE TABLE IF NOT EXISTS recording (

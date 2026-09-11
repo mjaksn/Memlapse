@@ -1,5 +1,5 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Memlapse" type="PythonConfigurationType" factoryName="Python">
+  <configuration default="false" name="memlapse" type="PythonConfigurationType" factoryName="Python">
     <module name="Memlapse" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />

@@ -1,6 +1,6 @@
-# Memlapse: Architecture
+# memlapse: Architecture
 
-Memlapse is a **memory forensics tool** for Windows: a Process Explorer / System
+memlapse is a **memory forensics tool** for Windows: a Process Explorer / System
 Informer-style monitor, designed around the distinguishing capability of
 **recording and replaying the memory activity of specific threads** in a running
 process (process-wide recording and playback are built; the per-thread engine
@@ -265,7 +265,7 @@ docs/
 
 ## Dashboard view (vivid near-live surface)
 
-Alongside the forensic monitor, Memlapse has a **Dashboard** tab: a vivid,
+Alongside the forensic monitor, memlapse has a **Dashboard** tab: a vivid,
 near-live overview built to *select, drill-down, interpret, and export*
 memory data. It is purely **additive**, it reuses the existing collector
 streams rather than introducing a parallel engine, and the forensic monitor
@@ -320,7 +320,7 @@ the same view so the dashboard works in playback mode too.
 
 ## In-memory injection heuristics (live-memory malware detection)
 
-Memlapse scores each memory region for signs of **code injection** and surfaces
+memlapse scores each memory region for signs of **code injection** and surfaces
 the result in the region view. The design follows the technique popularised by
 memory-forensics tooling and reverse-engineered EDRs: **find executable memory
 that is not backed by a file on disk, then corroborate with content signals.**
@@ -929,13 +929,13 @@ Neither touches a score. The band still answers for one sample.
 
 ### Planned: temporal RW→RX transition detector
 
-Because Memlapse *records over time*, it can do something a single-snapshot tool
+Because memlapse *records over time*, it can do something a single-snapshot tool
 cannot: diff a region's `protect` across consecutive samples and fire when a
 private region transitions **`PAGE_READWRITE` → `PAGE_EXECUTE_READ`**. That is
 the exact "allocate-RW, write payload, flip-to-RX" pattern EDRs watch for, and
 it directly addresses evasion (2) above. The planned entry point is
 `analytics.score_transition(prev_region, curr_region)`, scored over the
-playback timeline, the feature that makes Memlapse *exceed* the source technique
+playback timeline, the feature that makes memlapse *exceed* the source technique
 rather than merely reimplement it.
 
 The rule states its window explicitly rather than implying "consecutive
@@ -1095,5 +1095,5 @@ the feature ideas it suggests for later phases, is in
 [^entropy]: Shannon entropy (C. E. Shannon, *A Mathematical Theory of
     Communication*, 1948) measured over bytes ranges 0 to 8 bits/byte; packed
     or encrypted data approaches the 8.0 maximum, which is why a high
-    threshold (~7.0 to 7.2) is a common packing indicator. Memlapse uses
+    threshold (~7.0 to 7.2) is a common packing indicator. memlapse uses
     `ENTROPY_PACKED = 7.2`.

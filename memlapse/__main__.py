@@ -1,4 +1,4 @@
-"""Run Memlapse with ``python -m memlapse`` (add --elevate for admin)."""
+"""Run memlapse with ``python -m memlapse`` (add --elevate for admin)."""
 
 from __future__ import annotations
 

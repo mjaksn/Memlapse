@@ -1,1 +1,1 @@
-"""Thin ctypes wrappers around Win32 APIs used by Memlapse."""
+"""Thin ctypes wrappers around Win32 APIs used by memlapse."""

@@ -7,10 +7,10 @@
     the design and not a crash: elevation cannot be granted to a process that
     is already running, only to a new one. Prefer Run over Debug here.
 
-    To debug Memlapse with its privileges, start PyCharm elevated and use the
-    plain "Memlapse" configuration, which inherits them.
+    To debug memlapse with its privileges, start PyCharm elevated and use the
+    plain "memlapse" configuration, which inherits them.
   -->
-  <configuration default="false" name="Memlapse (elevated)" type="PythonConfigurationType" factoryName="Python">
+  <configuration default="false" name="memlapse (elevated)" type="PythonConfigurationType" factoryName="Python">
     <module name="Memlapse" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />

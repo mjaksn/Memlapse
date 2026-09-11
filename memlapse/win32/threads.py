@@ -9,7 +9,7 @@ so the address has to be asked for per thread, with
 
 That class is refused with ``THREAD_QUERY_LIMITED_INFORMATION``, so the handle
 is opened with ``THREAD_QUERY_INFORMATION``. This is the second kind of handle
-Memlapse opens, after the process handle in :mod:`memlapse.win32.memory`, and
+memlapse opens, after the process handle in :mod:`memlapse.win32.memory`, and
 it stays on the same side of the read-only boundary: query access only, never
 ``THREAD_SET_*``, never suspend or resume. A thread whose handle will not open,
 or whose address the kernel refuses, is left out of the result rather than
