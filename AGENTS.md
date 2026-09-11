@@ -255,7 +255,10 @@ as `memlapse.exe` and as `python -m memlapse` (2026-09-10).
   interpreter on the exe itself and then strips `.exe` from `sys.argv[0]`, so
   `sys.argv` names a file that does not exist, and an elevated copy started
   from it dies at once, silently, under pythonw. Only an installed copy shows
-  that one, and the tests reach both paths through a fake `ShellExecuteW`.
+  that one, and the tests reach both paths through a fake `ShellExecuteW`. The
+  real thing was checked once: `memlapse.exe --elevate` from an installed
+  wheel went through UAC and came up with the status bar reporting
+  SeDebugPrivilege (2026-09-10).
 - A release is a version bump in three places, `pyproject.toml`,
   `memlapse/__init__.py` and a new dated section at the top of `CHANGELOG.md`
   with its link definition at the foot, merged through a pull request like any
