@@ -72,7 +72,7 @@ Every command in this table has been run in this repo and its output verified. I
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages,
-and the test run is 472 passed with 100 percent line and branch coverage
+and the test run is 474 passed with 100 percent line and branch coverage
 (both 2026-09-10), run from a scratch venv holding the test tools, since the
 project venv has none of them (see the first gotcha below). `python main.py`
 was last checked by starting it headless (`QT_QPA_PLATFORM=offscreen`) under
@@ -247,11 +247,15 @@ as `memlapse.exe` and as `python -m memlapse` (2026-09-10).
 - A PyCharm run configuration is XML, so its comments cannot contain two
   hyphens in a row. Writing `--elevate` in one leaves a file no XML parser
   will accept; what PyCharm itself then shows has not been checked here.
-- `relaunch_as_admin` rebuilds the command line from `sys.orig_argv`, not
-  `sys.argv`. The `memlapse.exe` launcher pip writes runs the interpreter on
-  the exe itself and then strips `.exe` from `sys.argv[0]`, so `sys.argv`
-  names a file that does not exist, and an elevated copy started from it dies
-  at once, silently, under pythonw. Only an installed copy shows it.
+- `relaunch_as_admin` has two ways to rebuild the command line, and each is
+  wrong for the other's case. Started as a `.py` script it repeats `sys.argv`,
+  because under a debugger `sys.orig_argv` is the debugger's bootstrap, which
+  the editor launchers above would otherwise relaunch. Started any other way
+  it repeats `sys.orig_argv`: the `memlapse.exe` launcher pip writes runs the
+  interpreter on the exe itself and then strips `.exe` from `sys.argv[0]`, so
+  `sys.argv` names a file that does not exist, and an elevated copy started
+  from it dies at once, silently, under pythonw. Only an installed copy shows
+  that one, and the tests reach both paths through a fake `ShellExecuteW`.
 - A release is a version bump in three places, `pyproject.toml`,
   `memlapse/__init__.py` and a new dated section at the top of `CHANGELOG.md`
   with its link definition at the foot, merged through a pull request like any

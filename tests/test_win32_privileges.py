@@ -130,6 +130,33 @@ def test_relaunch_reruns_the_interpreter_command_line(monkeypatch):
     )
 
 
+def test_relaunch_repeats_python_dash_m(monkeypatch):
+    shell = FakeShell(exec_rc=42)
+    _set_shell(monkeypatch, shell)
+    package = "C:\\venv\\Lib\\site-packages\\memlapse\\"
+    monkeypatch.setattr(privileges.sys, "argv", [package + "__main__.py", "--elevate"])
+    monkeypatch.setattr(privileges.sys, "orig_argv", [
+        "python", "-X", "dev", "-m", "memlapse", "--elevate",
+    ])
+    assert relaunch_as_admin() is True
+    assert shell.executed[2] == "-X dev -m memlapse --elevate"
+
+
+def test_relaunch_repeats_a_script_as_its_argv_says(monkeypatch):
+    # main.py from a checkout, here under a debugger: the interpreter was
+    # started on the debugger's bootstrap, and the elevated copy must run
+    # main.py rather than that.
+    shell = FakeShell(exec_rc=42)
+    _set_shell(monkeypatch, shell)
+    monkeypatch.setattr(privileges.sys, "argv", ["C:\\my repo\\main.py", "--elevate"])
+    monkeypatch.setattr(privileges.sys, "orig_argv", [
+        "python", "C:\\debugpy\\launcher", "--port", "5678", "--",
+        "C:\\my repo\\main.py", "--elevate",
+    ])
+    assert relaunch_as_admin() is True
+    assert shell.executed[2] == '"C:\\my repo\\main.py" --elevate'
+
+
 def test_relaunch_failure_low_rc(monkeypatch):
     _set_shell(monkeypatch, FakeShell(exec_rc=5))  # <= 32 means failure
     assert relaunch_as_admin() is False

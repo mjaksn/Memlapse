@@ -12,6 +12,7 @@ import ctypes
 import subprocess
 import sys
 from ctypes import wintypes
+from pathlib import Path
 
 # --- constants -------------------------------------------------------------
 TOKEN_ADJUST_PRIVILEGES = 0x0020
@@ -103,16 +104,29 @@ def enable_se_debug_privilege() -> bool:
         _kernel32.CloseHandle(h_token)
 
 
+def _relaunch_params() -> str:
+    """The command line to hand the interpreter for an elevated copy of this run."""
+    script = Path(sys.argv[0])
+    if script.suffix.lower() == ".py" and script.name != "__main__.py":
+        # Started as a script, `python main.py` in a checkout, and sys.argv is
+        # what to repeat. It has to be: under a debugger the interpreter was
+        # started on the debugger's own bootstrap, which sys.argv leaves out
+        # and the elevated copy has no business running.
+        return subprocess.list2cmdline(sys.argv)
+    # Started any other way, sys.argv cannot be run again. Through the
+    # memlapse.exe launcher that pip writes, sys.argv[0] has had its ".exe"
+    # stripped and names a file that does not exist; under `python -m
+    # memlapse` it is the package's __main__.py, which cannot run outside the
+    # package. The interpreter's own command line still holds what it was
+    # given, the launcher's path or `-m memlapse`, and can be repeated.
+    return subprocess.list2cmdline(sys.orig_argv[1:])
+
+
 def relaunch_as_admin() -> bool:
     """Relaunch this program elevated via UAC. Returns True if a new elevated
     process was started (caller should then exit)."""
     try:
-        # The interpreter's own command line, not sys.argv. Started through
-        # the memlapse.exe launcher that pip writes, sys.argv[0] has had its
-        # ".exe" stripped and names a file that does not exist, while
-        # orig_argv still holds the launcher's path, which the interpreter can
-        # run again. It also carries `-m memlapse` and any -X options through.
-        params = subprocess.list2cmdline(sys.orig_argv[1:])
+        params = _relaunch_params()
         # ShellExecuteW returns > 32 on success.
         rc = ctypes.windll.shell32.ShellExecuteW(
             None, "runas", sys.executable, params, None, 1
