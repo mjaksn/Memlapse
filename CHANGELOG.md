@@ -12,7 +12,7 @@ being a breaking change. A recording is the part with the longest life, so a
 release after which an older recording no longer opens, or opens and scores
 differently, says so here.
 
-## [0.1.0] - 2026-09-10
+## [0.1.0] - 2026-09-11
 
 First release, and the first as a package: until now Memlapse ran only from a
 checkout with `python main.py`. It installs with `pip install memlapse` and
