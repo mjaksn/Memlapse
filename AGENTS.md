@@ -60,10 +60,12 @@ pip install -r requirements-dev.txt
 Every command in this table has been run in this repo and its output verified. If one
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
-Verified in a fresh venv: the install resolves and hash-checks 17 packages
-(2026-09-06). The test run is 465 passed with 100 percent line and branch
-coverage (2026-09-10), run from a scratch venv holding the test tools, since
-the project venv has none of them (see the first gotcha below).
+Verified in a fresh venv: the install resolves and hash-checks 17 packages,
+and the test run is 465 passed with 100 percent line and branch coverage
+(both 2026-09-10), run from a scratch venv holding the test tools, since the
+project venv has none of them (see the first gotcha below). `python main.py`
+was last checked by starting it headless (`QT_QPA_PLATFORM=offscreen`) under
+`-X dev`; it stayed up with no warnings until stopped.
 
 ## Conventions
 
