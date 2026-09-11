@@ -33,7 +33,7 @@ def test_schema_file_exists():
 def test_default_db_path_uses_localappdata(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     path = default_db_path()
-    assert path == tmp_path / "Memlapse" / "memlapse.db"
+    assert path == tmp_path / "memlapse" / "memlapse.db"
     assert path.parent.is_dir()
 
 

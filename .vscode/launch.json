@@ -1,5 +1,5 @@
 {
-  // Two ways to start Memlapse, both running main.py from the repo root.
+  // Two ways to start memlapse, both running main.py from the repo root.
   // See README.md, "Run".
   //
   // Both pin the interpreter to the .venv the README tells you to create, so
@@ -8,7 +8,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Memlapse",
+      "name": "memlapse",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/.venv/Scripts/python.exe",
@@ -24,9 +24,9 @@
       // That is the design and not a crash: elevation cannot be granted to a
       // process that is already running, only to a new one.
       //
-      // To debug Memlapse with its privileges, start VS Code elevated and use
-      // the plain "Memlapse" configuration above, which inherits them.
-      "name": "Memlapse (elevated, detached)",
+      // To debug memlapse with its privileges, start VS Code elevated and use
+      // the plain "memlapse" configuration above, which inherits them.
+      "name": "memlapse (elevated, detached)",
       "type": "debugpy",
       "request": "launch",
       "python": "${workspaceFolder}/.venv/Scripts/python.exe",

@@ -6,7 +6,7 @@ file. `CLAUDE.md` is a one line pointer to this file and holds nothing of its ow
 
 ## What this project is
 
-Memlapse is a Windows desktop tool (PySide6, SQLite) that lists processes, shows a
+memlapse is a Windows desktop tool (PySide6, SQLite) that lists processes, shows a
 process's memory map with a hex preview, records that map over time and replays it
 on a timeline, and scores each region for signs of in-memory code injection. It is a
 single-user forensic monitor, published to PyPI as `memlapse` and started with the
@@ -230,7 +230,7 @@ as `memlapse.exe` and as `python -m memlapse` (2026-09-10).
   third of these: zero rows in `recording_allowlist` mean "excused nothing"
   when it is set and "nobody wrote a list down" when it is NULL, and those
   score differently.
-- Recordings are stored per user under `%LOCALAPPDATA%\Memlapse\memlapse.db`. Recordings
+- Recordings are stored per user under `%LOCALAPPDATA%\memlapse\memlapse.db`. Recordings
   made under the old name live in a `MemDo` folder beside it and are not picked up.
 - `git grep -P` handles Unicode escapes; plain `grep -P` on this machine does not, and
   fails silently inside a pipeline.
@@ -268,6 +268,17 @@ as `memlapse.exe` and as `python -m memlapse` (2026-09-10).
   anything is uploaded. A version once on PyPI can never be uploaded again,
   even after it is deleted, so a mistake past the upload costs a version
   number.
+- PyPI's trusted publisher matches the repository name exactly, capitals
+  included, and says only `invalid-publisher` when it does not. v0.1.0 was
+  refused that way while the repository was still `Memlapse` and the
+  publisher `memlapse`, which is why the name is lower case everywhere and the
+  first release is 0.1.1. Renaming the repository, or the workflow file,
+  means changing the publisher on PyPI to match before the next tag.
+- `<module name="Memlapse" />` in the two PyCharm run configurations keeps its
+  capital on purpose. It names the PyCharm module, which PyCharm takes from
+  the checkout's folder name, and a run configuration pointing at a module
+  that does not exist will not start. Change it only together with the
+  folder.
 
 ## Out of bounds
 

@@ -1,4 +1,4 @@
-"""Launcher for Memlapse. Run with:  python main.py  (add --elevate for admin)."""
+"""Launcher for memlapse. Run with:  python main.py  (add --elevate for admin)."""
 
 from memlapse.app import main
 

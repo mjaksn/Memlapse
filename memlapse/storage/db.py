@@ -19,11 +19,11 @@ _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
 def default_db_path() -> Path:
-    """Per-user data location: %LOCALAPPDATA%\\Memlapse\\memlapse.db (or ~/.memlapse)."""
+    """Per-user data location: %LOCALAPPDATA%\\memlapse\\memlapse.db (or ~/.memlapse)."""
     import os
 
     base = os.environ.get("LOCALAPPDATA")
-    root = Path(base) / "Memlapse" if base else Path.home() / ".memlapse"
+    root = Path(base) / "memlapse" if base else Path.home() / ".memlapse"
     root.mkdir(parents=True, exist_ok=True)
     return root / "memlapse.db"
 
@@ -62,7 +62,7 @@ def _add_column(conn: sqlite3.Connection, table: str, column: str,
 
 
 def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
-    """Open (creating if needed) a Memlapse database with the schema applied."""
+    """Open (creating if needed) a memlapse database with the schema applied."""
     path = Path(db_path) if db_path is not None else default_db_path()
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row

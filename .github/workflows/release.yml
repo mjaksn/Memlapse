@@ -167,6 +167,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            --title "Memlapse ${GITHUB_REF_NAME#v}" \
+            --title "memlapse ${GITHUB_REF_NAME#v}" \
             --notes-file notes.md \
             --verify-tag

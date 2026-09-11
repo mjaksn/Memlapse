@@ -1,6 +1,6 @@
 # Changelog
 
-Notable changes to Memlapse. Versions follow [semantic
+Notable changes to memlapse. Versions follow [semantic
 versioning](https://semver.org/spec/v2.0.0.html): while the major version is 0
 the interface may still change, and any such change is called out here under
 **Changed** rather than assumed to be obvious from the version number.
@@ -12,12 +12,16 @@ being a breaking change. A recording is the part with the longest life, so a
 release after which an older recording no longer opens, or opens and scores
 differently, says so here.
 
-## [0.1.0] - 2026-09-11
+## [0.1.1] - 2026-09-11
 
-First release, and the first as a package: until now Memlapse ran only from a
+First release, and the first as a package: until now memlapse ran only from a
 checkout with `python main.py`. It installs with `pip install memlapse` and
 starts with `memlapse`, or `memlapse --elevate` to relaunch through UAC.
 Windows only, Python 3.14.
+
+The name is written in lower case throughout, in the window, the docs and the
+repository, as it already was on PyPI. 0.1.0 below was tagged and never
+published, which is why the first release is numbered 0.1.1.
 
 ### Added
 
@@ -42,4 +46,14 @@ Windows only, Python 3.14.
 - A dashboard of system memory gauges, a scrolling usage timeline, a ranked
   list of the processes using the most memory, and CSV and JSON export.
 
-[0.1.0]: https://github.com/mjaksn/Memlapse/releases/tag/v0.1.0
+## [0.1.0] - 2026-09-11
+
+Tagged, never published. PyPI refused the upload because the repository was
+then named `Memlapse` and the trusted publisher waiting for it named
+`memlapse`, and a trusted publisher matches the repository name exactly. No
+release was made anywhere, and the tag is left where it is so that the version
+number is never used for anything else. 0.1.1 is the same program under the
+lower case name.
+
+[0.1.1]: https://github.com/mjaksn/memlapse/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/mjaksn/memlapse/tree/v0.1.0

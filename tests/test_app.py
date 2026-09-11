@@ -68,7 +68,7 @@ def test_main_runs_gui(monkeypatch):
     monkeypatch.setattr(app_mod, "should_relaunch_elevated", lambda argv: False)
     assert main(["memlapse"]) == 0
     assert FakeApp.last is not None
-    assert FakeApp.last.name == "Memlapse"
+    assert FakeApp.last.name == "memlapse"
 
 
 def test_main_runs_gui_when_relaunch_fails(monkeypatch):

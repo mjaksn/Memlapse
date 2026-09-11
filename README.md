@@ -1,17 +1,17 @@
-# Memlapse
+# memlapse
 
-[![CI](https://github.com/mjaksn/Memlapse/actions/workflows/ci.yml/badge.svg)](https://github.com/mjaksn/Memlapse/actions/workflows/ci.yml)
-[![Release](https://github.com/mjaksn/Memlapse/actions/workflows/release.yml/badge.svg)](https://github.com/mjaksn/Memlapse/actions/workflows/release.yml)
+[![CI](https://github.com/mjaksn/memlapse/actions/workflows/ci.yml/badge.svg)](https://github.com/mjaksn/memlapse/actions/workflows/ci.yml)
+[![Release](https://github.com/mjaksn/memlapse/actions/workflows/release.yml/badge.svg)](https://github.com/mjaksn/memlapse/actions/workflows/release.yml)
 [![PyPI](https://img.shields.io/pypi/v/memlapse)](https://pypi.org/project/memlapse/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/mjaksn/Memlapse/blob/main/LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/mjaksn/memlapse/blob/main/LICENSE)
 
 A Windows memory forensics tool, Process Explorer / System Informer-style
 monitoring, that records a process's memory map over time and replays it.
 Recording and playback of the memory activity of specific threads is the
 planned next phase (Phase 5). See
-[docs/ARCHITECTURE.md](https://github.com/mjaksn/Memlapse/blob/main/docs/ARCHITECTURE.md)
+[docs/ARCHITECTURE.md](https://github.com/mjaksn/memlapse/blob/main/docs/ARCHITECTURE.md)
 for the design and
-[docs/RESEARCH_NOTES.md](https://github.com/mjaksn/Memlapse/blob/main/docs/RESEARCH_NOTES.md)
+[docs/RESEARCH_NOTES.md](https://github.com/mjaksn/memlapse/blob/main/docs/RESEARCH_NOTES.md)
 for the reference material behind the detection heuristics and the ideas
 queued for later phases.
 
@@ -119,7 +119,7 @@ says how to move a version.
 
 ## Licence
 
-MIT. See [LICENSE](https://github.com/mjaksn/Memlapse/blob/main/LICENSE).
+MIT. See [LICENSE](https://github.com/mjaksn/memlapse/blob/main/LICENSE).
 
 Changes are listed in
-[CHANGELOG.md](https://github.com/mjaksn/Memlapse/blob/main/CHANGELOG.md).
+[CHANGELOG.md](https://github.com/mjaksn/memlapse/blob/main/CHANGELOG.md).
