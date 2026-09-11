@@ -1,0 +1,183 @@
+name: Release
+
+# Tags only. Nothing here fires on a branch, so publishing is always a
+# deliberate act with a version number attached to it.
+#
+# Publishing goes through a trusted publisher registered on PyPI: a GitHub
+# publisher naming this repository, this workflow file, and the environment
+# below. It exchanges a short-lived OIDC token at publish time, so there is no
+# API token living in the repository secrets to leak or to rotate.
+#
+# It went in as a *pending* publisher, from the publishing page of the PyPI
+# account, because there is no project to attach an ordinary one to until
+# something has been uploaded and the first upload is the one that needs it.
+# PyPI turns it into an ordinary publisher when that upload creates the
+# project, and nothing needs arranging after that.
+#
+# A release goes to two places: the distributions to PyPI, and a GitHub
+# release carrying the same two files, with its notes lifted from the
+# changelog.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build the distributions
+    # On ubuntu, where the checkout has the line endings the repository
+    # stores. Nothing in this job imports the package, which would need
+    # Windows; the build job in ci.yml installs and runs the wheel there on
+    # every pull request.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The check below walks the history, and the shallow fetch that
+          # checkout does by default has none to walk.
+          fetch-depth: 0
+      - name: the tag must be on main
+        # A squash merge writes a commit of its own, so a tag put on the
+        # branch before the merge names a commit that never reaches main.
+        # What was published is still fine, but the history stops saying so:
+        # `git describe` on main answers with the release before this one, and
+        # the release reads as though it never happened. Merge first, then tag
+        # the commit that landed.
+        run: |
+          git fetch --no-tags --quiet origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD || {
+            echo "::error::$GITHUB_REF_NAME is not on main; merge first, then tag the commit that landed"
+            exit 1
+          }
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: install the pinned build tools
+        run: pip install --require-hashes --requirement requirements-build.txt
+      - name: build
+        # --no-isolation, so what builds the release is the setuptools just
+        # installed by hash, not whatever pyproject.toml's range resolves to
+        # on the day.
+        run: python -m build --no-isolation
+      - name: the tag and the version must agree
+        # A tag that disagrees with pyproject.toml (or the package's own
+        # __version__) publishes something nobody can find again. Cheaper to
+        # fail here than to yank a release.
+        #
+        # __version__ is read out of the file rather than imported. Importing
+        # the package here works only while memlapse/__init__.py imports
+        # nothing, since everything under it needs Windows, and this check
+        # should not be the thing that finds out the day that changes. The
+        # file names are checked as well, because they are what was built.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(python -c 'import tomllib,pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          pkg_version="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' memlapse/__init__.py)"
+          echo "tag $tag, pyproject $version, __version__ $pkg_version"
+          [ "$tag" = "$version" ] || {
+            echo "::error::tag $GITHUB_REF_NAME does not match version $version"
+            exit 1
+          }
+          [ "$tag" = "$pkg_version" ] || {
+            echo "::error::tag $GITHUB_REF_NAME does not match memlapse.__version__ $pkg_version"
+            exit 1
+          }
+          for file in "dist/memlapse-$tag-py3-none-any.whl" "dist/memlapse-$tag.tar.gz"; do
+            [ -f "$file" ] || {
+              echo "::error::expected $file; dist holds $(ls dist)"
+              exit 1
+            }
+          done
+      - name: the changelog must have a section for the version
+        # The GitHub release created after publishing quotes this section, so
+        # a tag the changelog says nothing about has to fail here, in the job
+        # that runs before anything is uploaded. Checked any later, the
+        # version would be on PyPI with no way to take it back and no notes to
+        # show for it.
+        #
+        # The heading itself is left behind. The release title carries the
+        # version, and the heading is a reference style link whose definition
+        # sits at the foot of the changelog, so lifted out on its own it
+        # would render as bare brackets.
+        run: |
+          python3 - <<'PY' > notes.md
+          import os, pathlib, re, sys
+          version = os.environ["GITHUB_REF_NAME"][1:]
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          found = re.search(
+              r"(?ms)^## \[%s\][^\n]*\n(.*?)(?=^## \[|^\[[0-9])"
+              % re.escape(version),
+              text)
+          if found is None or not found.group(1).strip():
+              raise SystemExit("CHANGELOG.md has no section for %s" % version)
+          sys.stdout.write(found.group(1).strip() + "\n")
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: distributions
+          path: dist/
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: notes
+          path: notes.md
+
+  publish:
+    name: publish to PyPI
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write        # the OIDC token trusted publishing exchanges
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: distributions
+          path: dist/
+      # Runs twine check on both files before it uploads either, which is the
+      # check requirements-build.txt leaves out.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+
+  release:
+    name: create the GitHub release
+    # Behind the upload, so a release page never announces a version that
+    # pip cannot find.
+    needs: [publish]
+    runs-on: ubuntu-latest
+    # The only job here that writes back to the repository, and the only one
+    # with no use for the OIDC token the publish above exchanges. Kept apart so
+    # that neither holds a permission the other needs. It does not check the
+    # repository out: the notes were lifted from the changelog and checked in
+    # build, before anything was uploaded, and arrive as an artifact beside
+    # the distributions.
+    #
+    # A release page written by hand would be a second account of a release
+    # that CHANGELOG.md already gives, free to drift from it. The section for
+    # the tag is quoted instead, so there is one account and the release page
+    # repeats it. The wheel and the sdist are attached, the same two files
+    # PyPI received, for anyone who would rather take them from here.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: notes
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: distributions
+          path: dist/
+      - name: create the release
+        # gh rather than an action, because the runner already has it and the
+        # token it needs is the one the job was given. Nothing new to pin.
+        # GH_REPO names the repository, since there is no checkout for gh to
+        # read it from.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Memlapse ${GITHUB_REF_NAME#v}" \
+            --notes-file notes.md \
+            --verify-tag \
+            dist/*

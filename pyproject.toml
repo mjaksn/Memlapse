@@ -1,3 +1,74 @@
+[build-system]
+requires = ["setuptools>=77"]        # PEP 639 licence expressions
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memlapse"
+version = "0.1.0"
+description = "A Windows memory forensics tool that records a process's memory map over time, replays it, and scores each region for signs of code injection"
+readme = "README.md"
+# The one interpreter CI runs. The code would parse on older ones, but a claim
+# nothing tests is a claim nobody finds out is false until somebody's install
+# does.
+requires-python = ">=3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "mjaksn" }]
+keywords = ["memory-forensics", "dfir", "process-injection", "malware-detection",
+            "windows", "virtualqueryex", "process-explorer", "pyside6"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Win32 (MS Windows)",
+  "Intended Audience :: Information Technology",
+  "Intended Audience :: System Administrators",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Security",
+  "Topic :: System :: Monitoring",
+]
+
+# Floors and ceilings, not the exact pins requirements.txt carries. This is
+# something people install with pip, often beside other things, and `==` here
+# would make it a package that has to be uninstalled before anything else can
+# move. Package metadata cannot carry hashes either, so requirements.txt stays
+# the hash-verified install and these say which versions it is known to work
+# with. Each floor is the version pinned there, and each ceiling is the next
+# minor, so a release that changes behaviour reaches an installed copy only
+# after it has been pinned, tested and let in here on purpose.
+# tests/test_version.py fails when a pin in requirements.txt falls outside its
+# range, which is what makes a Dependabot bump past a ceiling stop and ask.
+dependencies = [
+  "PySide6>=6.11.2,<6.12",
+  "psutil>=7.2.2,<7.3",
+  "pyqtgraph>=0.14.0,<0.15",
+]
+
+[project.gui-scripts]
+# A window, not a console program, so the launcher runs under pythonw and no
+# console opens beside it. `python -m memlapse` and `python main.py` in a
+# checkout run the same function.
+memlapse = "memlapse.app:main"
+
+[project.urls]
+Homepage = "https://github.com/mjaksn/Memlapse"
+Source = "https://github.com/mjaksn/Memlapse"
+Issues = "https://github.com/mjaksn/Memlapse/issues"
+Changelog = "https://github.com/mjaksn/Memlapse/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+# The package and its subpackages and nothing else. tests/ and scripts/ sit
+# beside it in the flat layout, and discovery has been known to reach for
+# them.
+include = ["memlapse", "memlapse.*"]
+
+[tool.setuptools.package-data]
+# Read at startup rather than imported, so nothing would pull it into the
+# wheel by itself. Without it every connection fails before a table exists,
+# which is why the build job in CI opens one from the installed wheel.
+"memlapse.storage" = ["schema.sql"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --strict-markers --cov --cov-report=term-missing"

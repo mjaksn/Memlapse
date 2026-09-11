@@ -1,0 +1,7 @@
+# What the sdist carries beyond the package. Left to itself setuptools takes
+# tests/test_*.py and nothing else from tests/, so the source distribution
+# would hold a suite without its conftest.py, and without the files
+# test_version.py reads, that could not run. With these it can test itself.
+graft tests
+include CHANGELOG.md requirements.txt requirements-dev.txt
+global-exclude *.py[cod]

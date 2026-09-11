@@ -9,6 +9,7 @@ request, can relaunch the app elevated via UAC.
 from __future__ import annotations
 
 import ctypes
+import subprocess
 import sys
 from ctypes import wintypes
 
@@ -106,7 +107,12 @@ def relaunch_as_admin() -> bool:
     """Relaunch this program elevated via UAC. Returns True if a new elevated
     process was started (caller should then exit)."""
     try:
-        params = " ".join(f'"{a}"' for a in sys.argv)
+        # The interpreter's own command line, not sys.argv. Started through
+        # the memlapse.exe launcher that pip writes, sys.argv[0] has had its
+        # ".exe" stripped and names a file that does not exist, while
+        # orig_argv still holds the launcher's path, which the interpreter can
+        # run again. It also carries `-m memlapse` and any -X options through.
+        params = subprocess.list2cmdline(sys.orig_argv[1:])
         # ShellExecuteW returns > 32 on success.
         rc = ctypes.windll.shell32.ShellExecuteW(
             None, "runas", sys.executable, params, None, 1

@@ -1,12 +1,19 @@
 # Memlapse
 
+[![CI](https://github.com/mjaksn/Memlapse/actions/workflows/ci.yml/badge.svg)](https://github.com/mjaksn/Memlapse/actions/workflows/ci.yml)
+[![Release](https://github.com/mjaksn/Memlapse/actions/workflows/release.yml/badge.svg)](https://github.com/mjaksn/Memlapse/actions/workflows/release.yml)
+[![PyPI](https://img.shields.io/pypi/v/memlapse)](https://pypi.org/project/memlapse/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/mjaksn/Memlapse/blob/main/LICENSE)
+
 A Windows memory forensics tool, Process Explorer / System Informer-style
 monitoring, that records a process's memory map over time and replays it.
 Recording and playback of the memory activity of specific threads is the
-planned next phase (Phase 5). See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-for the design and [docs/RESEARCH_NOTES.md](docs/RESEARCH_NOTES.md) for the
-reference material behind the detection heuristics and the ideas queued for
-later phases.
+planned next phase (Phase 5). See
+[docs/ARCHITECTURE.md](https://github.com/mjaksn/Memlapse/blob/main/docs/ARCHITECTURE.md)
+for the design and
+[docs/RESEARCH_NOTES.md](https://github.com/mjaksn/Memlapse/blob/main/docs/RESEARCH_NOTES.md)
+for the reference material behind the detection heuristics and the ideas
+queued for later phases.
 
 Antivirus checks are made mostly when a process starts, which leaves code
 written into a process that is already running unscanned. Sampling a live
@@ -61,20 +68,35 @@ Next: per-thread memory activity via ETW (Phase 5).
    where a region's executable bytes changed, which is where to scrub.
    **Live** returns to real-time mode.
 
-## Run
+## Install
+
+Windows only, Python 3.14.
+
+```powershell
+pip install memlapse
+
+memlapse            # live monitor
+memlapse --elevate  # relaunch elevated to read system and other users' processes
+```
+
+`python -m memlapse` runs the same thing. Running elevated enables
+`SeDebugPrivilege`, required to read most system and other-user processes.
+The status bar reports the privilege state when the window opens.
+
+The package accepts a range of versions of its three dependencies. For the
+exact versions it is tested with, each checked against the hashes PyPI
+publishes, install from a checkout instead:
+
+## Run from a checkout
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install --require-hashes -r requirements.txt
 
 python main.py            # live monitor
-python main.py --elevate  # relaunch elevated to read system and other users' processes
+python main.py --elevate  # relaunch elevated
 ```
-
-Running elevated enables `SeDebugPrivilege`, required to read most system and
-other-user processes. The status bar reports the privilege state when the
-window opens.
 
 VS Code and PyCharm each have a plain and an elevated launcher checked in, in
 `.vscode/launch.json` and `.idea/runConfigurations/`. The elevated one takes
@@ -97,4 +119,7 @@ says how to move a version.
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/mjaksn/Memlapse/blob/main/LICENSE).
+
+Changes are listed in
+[CHANGELOG.md](https://github.com/mjaksn/Memlapse/blob/main/CHANGELOG.md).

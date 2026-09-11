@@ -20,7 +20,7 @@
 #
 # To move a version, edit the pin by hand and then bring the hashes with it:
 #
-#     python scripts/lock_hashes.py requirements.txt requirements-dev.txt
+#     python scripts/lock_hashes.py requirements.txt requirements-dev.txt requirements-build.txt
 #
 # That reads the digests the index reports and downloads nothing. It chooses
 # no versions either, so anything a new version needs that is not already

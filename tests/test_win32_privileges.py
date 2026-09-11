@@ -26,6 +26,7 @@ class FakeShell:
     def ShellExecuteW(self, hwnd, verb, exe, params, cwd, show):
         if self._raise_on == "exec":
             raise OSError("boom")
+        self.executed = (verb, exe, params)
         return self._exec_rc
 
 
@@ -110,6 +111,23 @@ def test_enable_not_all_assigned(monkeypatch):
 def test_relaunch_success(monkeypatch):
     _set_shell(monkeypatch, FakeShell(exec_rc=42))
     assert relaunch_as_admin() is True
+
+
+def test_relaunch_reruns_the_interpreter_command_line(monkeypatch):
+    # What the pip launcher leaves behind: orig_argv names memlapse.exe, which
+    # the interpreter can run, while sys.argv[0] has lost its extension.
+    shell = FakeShell(exec_rc=42)
+    _set_shell(monkeypatch, shell)
+    scripts = "C:\\my venv\\Scripts\\"
+    monkeypatch.setattr(privileges.sys, "executable", scripts + "pythonw.exe")
+    monkeypatch.setattr(privileges.sys, "argv", [scripts + "memlapse", "--elevate"])
+    monkeypatch.setattr(privileges.sys, "orig_argv", [
+        scripts + "pythonw.exe", scripts + "memlapse.exe", "--elevate",
+    ])
+    assert relaunch_as_admin() is True
+    assert shell.executed == (
+        "runas", scripts + "pythonw.exe", f'"{scripts}memlapse.exe" --elevate',
+    )
 
 
 def test_relaunch_failure_low_rc(monkeypatch):
