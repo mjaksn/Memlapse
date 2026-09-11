@@ -60,16 +60,120 @@ jobs:
         # imported; nothing here needs a display or elevation.
         run: python -m pytest
 
+  build:
+    name: build and install
+    # On Windows, like the suite. The wheel is pure Python and would build
+    # anywhere, but the last step imports what was built, and the win32
+    # package loads kernel32 at import time. Bash rather than the default
+    # PowerShell so that dist/*.whl is a glob and the heredocs work.
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: install the pinned build tools
+        run: pip install --require-hashes --requirement requirements-build.txt
+      - name: build the distributions
+        # --no-isolation, so the build runs on the setuptools just installed
+        # from the hashed file rather than on whatever pyproject.toml's range
+        # resolves to on the day.
+        run: python -m build --no-isolation
+      - name: check what went into them
+        # In place of twine check, which for a Markdown README comes down to
+        # the metadata being present: this reads the metadata and says what
+        # it has to be. The publish action runs twine check as well, before
+        # anything is uploaded.
+        run: |
+          python - <<'PY'
+          import pathlib, tarfile, tomllib, zipfile
+          project = tomllib.loads(
+              pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
+          version = project["version"]
+          (wheel,) = pathlib.Path("dist").glob("*.whl")
+          (sdist,) = pathlib.Path("dist").glob("*.tar.gz")
+          info = f"memlapse-{version}.dist-info"
+          with zipfile.ZipFile(wheel) as archive:
+              names = archive.namelist()
+              # Written in text mode, so a wheel built here has CRLF in it;
+              # the one release.yml builds on ubuntu does not.
+              meta = archive.read(f"{info}/METADATA").decode("utf-8").replace("\r\n", "\n")
+          stray = {name.split("/")[0] for name in names} - {"memlapse", info}
+          assert not stray, f"the wheel carries {sorted(stray)}"
+          assert "memlapse/storage/schema.sql" in names, "schema.sql missing from the wheel"
+          head, _, body = meta.partition("\n\n")
+          fields = {}
+          for line in head.splitlines():
+              key, _, value = line.partition(": ")
+              fields.setdefault(key, []).append(value)
+          want = {
+              "Name": ["memlapse"],
+              "Version": [version],
+              "Requires-Python": [project["requires-python"]],
+              "Description-Content-Type": ["text/markdown"],
+              "License-Expression": ["MIT"],
+          }
+          for key, value in want.items():
+              assert fields.get(key) == value, f"{key}: {fields.get(key)}, wanted {value}"
+          assert body.startswith("# Memlapse"), "the README is not the long description"
+          # The sdist is meant to be able to test itself; MANIFEST.in says why.
+          with tarfile.open(sdist) as archive:
+              members = {name.partition("/")[2] for name in archive.getnames()}
+          for need in ("tests/conftest.py", "CHANGELOG.md", "requirements.txt",
+                       "memlapse/storage/schema.sql"):
+              assert need in members, f"{need} missing from the sdist"
+          print(f"{wheel.name}: {len(names)} entries; {sdist.name}: {len(members)}")
+          PY
+      - name: install the wheel somewhere else and run it
+        # The runtime pins go in first, by hash, and then the wheel without
+        # its dependencies, so nothing unverified is installed. pip check then
+        # proves the ranges in pyproject.toml admit those pins. The probe runs
+        # from another directory on purpose: from the repository root it
+        # would import the source tree and prove nothing about the wheel,
+        # which is the thing anybody else actually receives.
+        run: |
+          python -m venv /tmp/probe
+          /tmp/probe/Scripts/python.exe -m pip install --quiet --require-hashes --requirement requirements.txt
+          /tmp/probe/Scripts/python.exe -m pip install --quiet --no-deps dist/*.whl
+          /tmp/probe/Scripts/python.exe -m pip check
+          test -f /tmp/probe/Scripts/memlapse.exe || {
+            echo "::error::the memlapse launcher was not installed"
+            exit 1
+          }
+          cd /tmp
+          /tmp/probe/Scripts/python.exe - <<'PY'
+          import pathlib, tempfile
+          import memlapse
+          import memlapse.__main__  # noqa: F401  (what python -m memlapse runs)
+          from memlapse.storage import db
+          here = pathlib.Path(memlapse.__file__).parent
+          assert "site-packages" in str(here), f"imported from {here}"
+          # schema.sql is read, not imported, so only opening a database
+          # shows it arrived where the code looks for it.
+          with tempfile.TemporaryDirectory() as tmp:
+              conn = db.connect(pathlib.Path(tmp) / "probe.db")
+              tables = {row[0] for row in conn.execute(
+                  "select name from sqlite_master where type = 'table'")}
+              conn.close()
+          assert {"recording", "process_snapshot", "region_snapshot"} <= tables, tables
+          print("ran", memlapse.__version__, "from", here)
+          PY
+
   gate:
     name: gate
     # The single check for branch protection to require. Runs whatever the
     # others did, so a failure upstream is reported here rather than leaving
     # the gate skipped and the requirement satisfied by default.
     if: always()
-    needs: [test]
+    needs: [test, build]
     runs-on: ubuntu-latest
     steps:
       - name: every job must have succeeded
         run: |
-          echo "test ${{ needs.test.result }}"
-          [ "${{ needs.test.result }}" = "success" ] || exit 1
+          echo "test  ${{ needs.test.result }}"
+          echo "build ${{ needs.build.result }}"
+          [ "${{ needs.test.result }}"  = "success" ] || exit 1
+          [ "${{ needs.build.result }}" = "success" ] || exit 1

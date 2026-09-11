@@ -1,5 +1,9 @@
 """Tests for the application entry point."""
 
+import runpy
+
+import pytest
+
 import memlapse.app as app_mod
 from memlapse.app import main, should_relaunch_elevated
 
@@ -74,3 +78,10 @@ def test_main_runs_gui_when_relaunch_fails(monkeypatch):
     monkeypatch.setattr(app_mod.privileges, "relaunch_as_admin", lambda: False)
     assert main(["memlapse", "--elevate"]) == 0
     assert FakeApp.last is not None  # fell through to launching the GUI
+
+
+def test_python_dash_m_runs_main_and_exits_with_its_code(monkeypatch):
+    monkeypatch.setattr(app_mod, "main", lambda: 7)
+    with pytest.raises(SystemExit) as exited:
+        runpy.run_module("memlapse", run_name="__main__")
+    assert exited.value.code == 7

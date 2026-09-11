@@ -9,8 +9,10 @@ file. `CLAUDE.md` is a one line pointer to this file and holds nothing of its ow
 Memlapse is a Windows desktop tool (PySide6, SQLite) that lists processes, shows a
 process's memory map with a hex preview, records that map over time and replays it
 on a timeline, and scores each region for signs of in-memory code injection. It is a
-single-user forensic monitor run from a checkout with `python main.py`; it is not an
-installable package, a service, or a blocking security product.
+single-user forensic monitor, published to PyPI as `memlapse` and started with the
+`memlapse` launcher that installs, with `python -m memlapse`, or from a checkout
+with `python main.py`, all three reaching `memlapse.app.main`. It is not a service
+or a blocking security product.
 
 ## Layout
 
@@ -32,6 +34,10 @@ installable package, a service, or a blocking security product.
   holds the reference reading and the ideas queued for later phases.
 - `scripts/lock_hashes.py`: writes the hashes into the requirements files (see
   Conventions). Not part of the application and not under coverage.
+- Packaging and release: `pyproject.toml` (metadata, the dependency ranges, the
+  `schema.sql` package data), `MANIFEST.in` (what the sdist carries beyond the
+  package), `requirements-build.txt`, `CHANGELOG.md`, and
+  `.github/workflows/release.yml`, which a `v*` tag runs.
 
 ## Environment
 
@@ -59,20 +65,25 @@ pip install -r requirements-dev.txt
 | Type check | none configured |
 | Format | none configured; 4-space indent, lines mostly within 88 columns |
 | Run | `python main.py` (`python main.py --elevate` relaunches through UAC) |
-| Lock hashes | `python scripts/lock_hashes.py requirements.txt requirements-dev.txt` (`--check` writes nothing, exits 1 if stale) |
+| Build | `pip install --require-hashes -r requirements-build.txt`, then `python -m build --no-isolation` |
+| Lock hashes | `python scripts/lock_hashes.py requirements.txt requirements-dev.txt requirements-build.txt` (`--check` writes nothing, exits 1 if stale) |
 
 Every command in this table has been run in this repo and its output verified. If one
 is added without running it, mark it `UNVERIFIED` rather than implying otherwise.
 
 Verified in a fresh venv: the install resolves and hash-checks 17 packages,
-and the test run is 465 passed with 100 percent line and branch coverage
+and the test run is 474 passed with 100 percent line and branch coverage
 (both 2026-09-10), run from a scratch venv holding the test tools, since the
 project venv has none of them (see the first gotcha below). `python main.py`
 was last checked by starting it headless (`QT_QPA_PLATFORM=offscreen`) under
 `-X dev`; it stayed up with no warnings until stopped (2026-09-10). The lock
-hashes command rewrote both files with the same 247 package and digest pairs
-the old uv output held, and `--check` then reported both current
-(2026-09-10).
+hashes command rewrote the runtime and dev files with the same 247 package
+and digest pairs the old uv output held, and `--check` then reported all
+three current (2026-09-10). The build installed 5 packages by hash and made a
+wheel of 40 entries and an sdist whose unpacked copy passes the whole suite;
+the wheel, installed over `requirements.txt` into a fresh venv, passed
+`pip check`, opened a database from site-packages, and started headless both
+as `memlapse.exe` and as `python -m memlapse` (2026-09-10).
 
 ## Conventions
 
@@ -123,10 +134,15 @@ the old uv output held, and `--check` then reported both current
   threads, because only a real call catches a wrong struct layout or a wrong
   information class, and a fake would pass either way. Nothing in the suite needs
   elevation, and nothing needs a target process other than itself.
+- `test_version.py` holds together what `release.yml` checks on a tag: the version in
+  `pyproject.toml`, `__version__` and the changelog's first heading, plus every
+  requirements pin sitting inside the range `pyproject.toml` declares for it.
 - CI (`.github/workflows/ci.yml`) runs the same install and `python -m pytest` on
-  windows-latest with Python 3.14, on pull requests and pushes to main. Windows only,
-  because `memlapse/win32` loads kernel32 and advapi32 at import time. The `gate` job
-  is the one check a ruleset should require.
+  windows-latest with Python 3.14, on pull requests and pushes to main, and a `build`
+  job that builds with the pinned tools, reads the wheel's metadata and contents, and
+  installs and imports it from outside the checkout. Windows only, because
+  `memlapse/win32` loads kernel32 and advapi32 at import time. The `gate` job is the
+  one check a ruleset should require.
 
 ## Gotchas
 
@@ -231,12 +247,35 @@ the old uv output held, and `--check` then reported both current
 - A PyCharm run configuration is XML, so its comments cannot contain two
   hyphens in a row. Writing `--elevate` in one leaves a file no XML parser
   will accept; what PyCharm itself then shows has not been checked here.
+- `relaunch_as_admin` has two ways to rebuild the command line, and each is
+  wrong for the other's case. Started as a `.py` script it repeats `sys.argv`,
+  because under a debugger `sys.orig_argv` is the debugger's bootstrap, which
+  the editor launchers above would otherwise relaunch. Started any other way
+  it repeats `sys.orig_argv`: the `memlapse.exe` launcher pip writes runs the
+  interpreter on the exe itself and then strips `.exe` from `sys.argv[0]`, so
+  `sys.argv` names a file that does not exist, and an elevated copy started
+  from it dies at once, silently, under pythonw. Only an installed copy shows
+  that one, and the tests reach both paths through a fake `ShellExecuteW`. The
+  real thing was checked once: `memlapse.exe --elevate` from an installed
+  wheel went through UAC and came up with the status bar reporting
+  SeDebugPrivilege (2026-09-10).
+- A release is a version bump in three places, `pyproject.toml`,
+  `memlapse/__init__.py` and a new dated section at the top of `CHANGELOG.md`
+  with its link definition at the foot, merged through a pull request like any
+  other change. Then tag the commit that landed on main, `git tag v<version>
+  <sha>`, and push the tag. `release.yml` refuses a tag that is not on main,
+  disagrees with either version, or has no changelog section, all before
+  anything is uploaded. A version once on PyPI can never be uploaded again,
+  even after it is deleted, so a mistake past the upload costs a version
+  number.
 
 ## Out of bounds
 
 - Do not push, open or edit pull requests or issues, or take any other action that
   leaves this machine, without explicit permission.
-- The `--hash` lines in `requirements.txt` and `requirements-dev.txt` are written by
+- Pushing a `v*` tag publishes to PyPI and creates a GitHub release. It is an action
+  that leaves this machine like any other and waits for the same explicit permission.
+- The `--hash` lines in the three requirements files are written by
   `scripts/lock_hashes.py`, never by hand, and that script is edited in toolshed.
 - Never add a write, protection-change or remote-thread primitive to `memlapse/win32/`.
   The tool reads memory only; that boundary is what keeps it distinguishable from an
